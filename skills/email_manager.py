@@ -1,0 +1,271 @@
+import os
+import base64
+from email.message import EmailMessage
+from google.cloud import storage
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
+from langchain_core.prompts import PromptTemplate
+import json
+
+# Security: Restricted scopes. 
+# gmail.modify allows reading, labeling, and moving, but NOT permanent deletion.
+# gmail.send restricts sending securely.
+SCOPES = [
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.send'
+]
+
+# Cache for the allowlist so we don't query GCS every time
+_cached_allowlist = None
+
+def get_allowed_recipients():
+    """Fetches the allowlist from a secure Google Cloud Storage bucket."""
+    global _cached_allowlist
+    if _cached_allowlist is not None:
+        return _cached_allowlist
+    
+    bucket_name = os.getenv("ALLOWLIST_BUCKET_NAME")
+    if not bucket_name:
+        print("⚠️ ALLOWLIST_BUCKET_NAME not set in .env! Defaulting to strict hardcoded allowlist.")
+        _cached_allowlist = ["satviksethia@gmail.com"]
+        return _cached_allowlist
+        
+    try:
+        print(f"🔒 Fetching secure allowlist from GCS bucket: {bucket_name}...")
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob("allowlist.json")
+        
+        content = blob.download_as_text()
+        data = json.loads(content)
+        _cached_allowlist = data.get("allowed_emails", [])
+        return _cached_allowlist
+    except Exception as e:
+        print(f"❌ Failed to fetch allowlist from GCS: {e}")
+        # Fail safe to an empty list so no emails can be sent if security checks fail
+        return []
+
+def get_gmail_service():
+    """Shows basic usage of the Gmail API."""
+    creds = None
+    # The file token.json stores the user's access and refresh tokens
+    token_path = os.path.join(os.path.dirname(__file__), '..', 'token.json')
+    creds_path = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
+
+    if os.path.exists(token_path):
+        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                creds_path, SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open(token_path, 'w') as token:
+            token.write(creds.to_json())
+
+    try:
+        service = build('gmail', 'v1', credentials=creds)
+        return service
+    except HttpError as error:
+        print(f'An error occurred initializing Gmail: {error}')
+        return None
+
+def fetch_recent_emails(service, max_results=10):
+    """Fetch the latest emails from INBOX."""
+    print(f"Fetching last {max_results} emails from INBOX...")
+    try:
+        results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=max_results).execute()
+        messages = results.get('messages', [])
+
+        if not messages:
+            print('No new messages.')
+            return []
+        
+        email_data = []
+        for message in messages:
+            msg = service.users().messages().get(userId='me', id=message['id']).execute()
+            
+            # Extract basic info
+            headers = msg['payload'].get('headers', [])
+            subject = next((header['value'] for header in headers if header['name'] == 'Subject'), 'No Subject')
+            sender = next((header['value'] for header in headers if header['name'] == 'From'), 'Unknown Sender')
+            snippet = msg.get('snippet', '')
+            
+            email_data.append({
+                'id': message['id'],
+                'subject': subject,
+                'sender': sender,
+                'snippet': snippet
+            })
+            
+        return email_data
+
+    except HttpError as error:
+        print(f'An error occurred fetching emails: {error}')
+        return []
+
+def get_or_create_label(service, label_name="To Be Deleted"):
+    """Gets the ID of a label, or creates it if it doesn't exist."""
+    results = service.users().labels().list(userId='me').execute()
+    labels = results.get('labels', [])
+    for label in labels:
+        if label['name'] == label_name:
+            return label['id']
+            
+    # Create it
+    label_object = {
+        'messageListVisibility': 'show',
+        'name': label_name,
+        'labelListVisibility': 'labelShow'
+    }
+    created_label = service.users().labels().create(userId='me', body=label_object).execute()
+    return created_label['id']
+
+def apply_label_to_email(service, email_id, label_id):
+    """Applies a label to an email (and theoretically removes INBOX to archive)."""
+    body = {
+        'addLabelIds': [label_id],
+        'removeLabelIds': ['INBOX']
+    }
+    service.users().messages().modify(userId='me', id=email_id, body=body).execute()
+
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from memory import load_profile, update_profile
+from langchain_core.tools import tool
+
+@tool
+def update_memory(key: str, value: str) -> str:
+    """Use this tool to save a new preference or fact about the user.
+    For example, if the user mentions they hate newsletters, save key='hates_newsletters', value='true'.
+    """
+    update_profile(key, value)
+    return "Memory successfully updated."
+
+def send_email(service, to_email, subject, body_text):
+    """Sends an email using the Gmail API, strictly enforcing the allowlist."""
+    allowed_recipients = get_allowed_recipients()
+    
+    if to_email not in allowed_recipients:
+        print(f"❌ SECURITY BLOCK: Cannot send email to {to_email}. Not in GCS allowlist.")
+        return None
+        
+    print(f"Sending email to {to_email}...")
+    message = EmailMessage()
+    message.set_content(body_text)
+    message['To'] = to_email
+    message['From'] = 'me'
+    message['Subject'] = subject
+
+    # base64url encode the message bytes
+    encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    create_message = {'raw': encoded_message}
+
+    try:
+        sent_message = service.users().messages().send(userId="me", body=create_message).execute()
+        print(f"✅ Email sent successfully! (Message ID: {sent_message['id']})")
+        return sent_message
+    except HttpError as error:
+        print(f"❌ An error occurred sending the email: {error}")
+        return None
+
+def run_email_summary():
+    """Fetches and processes recent emails from the Gmail API."""
+    print("Running Pilot Skill: Email Summary...")
+    service = get_gmail_service()
+    if not service:
+        print("Failed to start Gmail service. Check credentials.json.")
+        return None, None
+        
+    emails = fetch_recent_emails(service)
+    if not emails:
+        return []
+
+    # Get the LLM with fallbacks
+    print("Initializing LLM Router (Opus -> Sonnet -> Gemini)...")
+    try:
+        # Primary: Claude 3 Opus
+        llm_opus = ChatAnthropic(model="claude-3-opus-20240229", temperature=0)
+        # Fallback 1: Claude 3.5 Sonnet
+        llm_sonnet = ChatAnthropic(model="claude-3-5-sonnet-20241022", temperature=0)
+        # Fallback 2: Gemini 2.5 Flash
+        llm_gemini = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+        
+        # Link them together
+        llm = llm_opus.with_fallbacks([llm_sonnet, llm_gemini])
+    except Exception as e:
+        print(f"Failed to intialize LLM. Error: {e}")
+        return [], []
+
+    # Load User Profile (Memory Layer 1)
+    profile_data = load_profile()
+    profile_text = json.dumps(profile_data, indent=2) if profile_data else "No specific personal context available."
+
+    prompt = PromptTemplate(
+        input_variables=["email_data", "profile_data"],
+        template='''You are an intelligent email assistant. Analyze the following emails.
+        For each email, decide if it is "IMPORTANT", "NEWS", or "JUNK/PROMOTION".
+        
+        Here is what you know about the user:
+        {profile_data}
+        
+        Use this knowledge to determine what is truly important to them.
+        
+        Emails:
+        {email_data}
+        
+        Return ONLY a raw JSON array of objects with the following keys:
+        - "id": the email id
+        - "category": the category you chose
+        - "summary": a 1-sentence summary of the email (if important/news. If junk, leave blank)
+        - "action": "KEEP" or "DELETE"
+        
+        Do not output markdown code blocks. Just the raw JSON array.
+        '''
+    )
+
+    formatted_emails = json.dumps(emails, indent=2)
+    chain = prompt | llm
+    
+    response = chain.invoke({
+        "email_data": formatted_emails,
+        "profile_data": profile_text
+    })
+    
+    try:
+        # Clean potential markdown from output
+        cleaned_response = response.content.strip().strip('```json').strip('```')
+        classifications = json.loads(cleaned_response)
+        
+        label_id = get_or_create_label(service, "To Be Deleted")
+        
+        print("\n--- Daily Email Summary ---\n")
+        
+        for item in classifications:
+            email_info = next((e for e in emails if e['id'] == item['id']), None)
+            if not email_info: continue
+                
+            if item['action'] == 'DELETE':
+                print(f"[TRASHING] {email_info['subject']}")
+                apply_label_to_email(service, item['id'], label_id)
+            else:
+                print(f"[{item['category']}] {email_info['sender']}")
+                print(f"Subject: {email_info['subject']}")
+                print(f"Summary: {item['summary']}\n")
+                
+        return classifications, emails
+                
+    except json.JSONDecodeError:
+        print("Failed to parse LLM response. Raw output:")
+        print(response.content)
+        return [], []
+
