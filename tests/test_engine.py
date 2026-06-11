@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import engine
 from engine import (Monitor, Notification, ProactiveEngine, CommitmentMonitor,
-                    EmailDigestMonitor, ChaseMonitor, NetflixMonitor)
+                    EmailDigestMonitor, ChaseMonitor, InsightMonitor, NetflixMonitor)
 
 
 class StubMonitor(Monitor):
@@ -304,6 +304,56 @@ class TestHealthMonitor(TempStateMixin, unittest.TestCase):
     def test_silent_when_all_ok(self):
         with patch('healthcheck.run_all', return_value=[('x', 'OK', 'fine')]):
             self.assertEqual(engine.HealthMonitor().check({}), [])
+
+
+class TestInsightMonitor(TempStateMixin, unittest.TestCase):
+    def _mon(self, hour=11):
+        m = InsightMonitor(now_fn=lambda: datetime(2026, 6, 12, hour, 0))
+        m._gather = lambda: "OPEN COMMITMENTS:\n#3 Reply to Priya — due 2026-06-09 OVERDUE"
+        return m
+
+    def _llm(self, verdict_json):
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content=verdict_json)
+        return llm
+
+    def test_silent_at_night(self):
+        m = InsightMonitor(now_fn=lambda: datetime(2026, 6, 12, 23, 0))
+        with patch('llm_router.get_llm') as g:
+            self.assertEqual(m.check({}), [])
+        g.assert_not_called()
+
+    def test_one_insight_per_halfday(self):
+        m = self._mon(hour=11)
+        with patch('llm_router.get_llm',
+                   return_value=self._llm('{"send": true, "insight": "Free morning — clear the Priya reply."}')):
+            state = {}
+            first = m.check(state)
+            second = m.check(state)
+        self.assertEqual(len(first), 1)
+        self.assertIn("Priya", first[0].text)
+        self.assertEqual(second, [])               # AM slot already used
+
+    def test_silence_verdict_sends_nothing(self):
+        m = self._mon()
+        with patch('llm_router.get_llm',
+                   return_value=self._llm('{"send": false, "insight": ""}')):
+            self.assertEqual(m.check({}), [])
+
+    def test_empty_context_skips_without_llm(self):
+        m = InsightMonitor(now_fn=lambda: datetime(2026, 6, 12, 11, 0))
+        m._gather = lambda: ""
+        with patch('llm_router.get_llm') as g:
+            self.assertEqual(m.check({}), [])
+        g.assert_not_called()
+
+    def test_recent_insights_tracked_for_dedup(self):
+        m = self._mon()
+        with patch('llm_router.get_llm',
+                   return_value=self._llm('{"send": true, "insight": "Rain at 3 — move your run earlier."}')):
+            state = {}
+            m.check(state)
+        self.assertIn("Rain at 3 — move your run earlier.", state["recent"])
 
 
 class TestNetflixMonitor(TempStateMixin, unittest.TestCase):

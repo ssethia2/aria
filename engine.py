@@ -5,6 +5,10 @@ A background loop of pluggable Monitors, each polled on its own interval:
                         surface in the briefing/digest instead — no random pings)
   - EmailDigestMonitor: LLM-screens new mail; flagged items accumulate into ONE
                         evening digest, and replies-owed become tracked commitments
+  - ChaseMonitor:       daytime judgment nudges on aging/overdue commitments
+  - InsightMonitor:     twice-daily cross-source intelligence — looks at calendar +
+                        commitments + weather together and surfaces one non-obvious,
+                        useful thing (or stays silent, the default)
   - NetflixMonitor:     spots a fresh "Update Netflix Household" email, runs the
                         browser automation immediately, reports the outcome
 
@@ -370,6 +374,106 @@ class HealthMonitor(Monitor):
         return [Notification("🩺 Something needs attention:\n\n" + summary(results))]
 
 
+class InsightMonitor(Monitor):
+    """Proactive intelligence — the 'is there anything actually worth telling Satvik?'
+    pass. Twice a day it looks ACROSS calendar + commitments + weather together and
+    surfaces ONE non-obvious, useful thing a sharp human assistant would mention — a
+    conflict, a good window to clear an aging task, weather that breaks a plan, a
+    connection he'd miss. Silence is the default; it never restates what he can already
+    see, and never repeats a recent insight. This is judgment, not a data dump (that's
+    the morning briefing's job).
+    """
+
+    PROMPT = """You are Aria's proactive intelligence. Looking across the user's day, decide
+if there is ONE genuinely useful thing worth telling him RIGHT NOW, unprompted — the kind
+of remark a sharp human chief-of-staff makes. Default HARD to saying nothing.
+
+WORTH surfacing: a scheduling conflict or tight turnaround; a good open window to knock out
+an overdue or aging task; weather that affects a specific plan; a connection between items
+he might miss; a heads-up that gives useful lead time.
+NOT worth surfacing: restating his calendar or commitments (he can see those); generic
+reminders; anything obvious; anything similar to what you've recently told him.
+
+You have recently told him (do NOT repeat these or close variants):
+{recent}
+
+It is {when}. Here is his current context:
+{context}
+
+Return ONLY JSON (no markdown):
+{{"send": true/false, "insight": "<one or two warm, specific sentences, or empty>"}}"""
+
+    def __init__(self, interval_seconds=7200, now_fn=None):
+        super().__init__(name="insight", interval_seconds=interval_seconds)
+        self.now_fn = now_fn or datetime.now
+
+    def _gather(self):
+        parts = []
+        try:
+            from skills.commitment_manager import (get_due_commitments,
+                                                   get_upcoming_commitments, format_line)
+            items = get_due_commitments() + get_upcoming_commitments(days=3)
+            if items:
+                parts.append("OPEN COMMITMENTS:\n" + "\n".join(format_line(c) for c in items))
+        except Exception as e:
+            print(f"[insight] commitments gather failed: {e}")
+        try:
+            from skills.google_calendar import fetch_events
+            ev = fetch_events(days=2)
+            if ev:
+                parts.append("CALENDAR (next 2 days):\n" + "\n".join(ev))
+        except Exception as e:
+            print(f"[insight] calendar gather failed: {e}")
+        try:
+            from skills.weather_manager import fetch_weather_lines
+            w = fetch_weather_lines(days=2)
+            if w:
+                parts.append("WEATHER:\n" + "\n".join(w))
+        except Exception as e:
+            print(f"[insight] weather gather failed: {e}")
+        return "\n\n".join(parts)
+
+    def check(self, state: dict) -> list:
+        now = self.now_fn()
+        if not (10 <= now.hour < 21):
+            return []  # daytime judgment only
+        slot = f"{now.strftime('%Y-%m-%d')}-{'AM' if now.hour < 14 else 'PM'}"
+        if state.get("last_slot") == slot:
+            return []  # at most one insight per half-day
+
+        context = self._gather()
+        if not context.strip():
+            state["last_slot"] = slot
+            return []
+
+        recent = state.get("recent", [])
+        from llm_router import get_llm
+        prompt = self.PROMPT.format(
+            recent="\n".join(f"- {r}" for r in recent) or "(nothing yet)",
+            when=now.strftime('%A %-I%p'), context=context)
+        try:
+            resp = get_llm(temperature=0).invoke(prompt)
+        except Exception as e:
+            print(f"[insight] llm failed: {e}")
+            return []  # don't burn the slot on a transient failure
+        content = resp.content
+        if isinstance(content, list):
+            content = next((b['text'] for b in content
+                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        try:
+            verdict = _parse_llm_json(content)
+        except Exception:
+            print(f"[insight] unparseable verdict: {content[:160]}")
+            return []
+
+        state["last_slot"] = slot
+        if not verdict.get("send") or not verdict.get("insight"):
+            return []
+        text = verdict["insight"].strip()
+        state["recent"] = (recent + [text])[-8:]
+        return [Notification("💡 " + text)]
+
+
 class NetflixMonitor(Monitor):
     """Acts the moment a household-update email lands; the *report* can wait.
 
@@ -476,7 +580,7 @@ class ProactiveEngine:
 def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
     return ProactiveEngine(
         monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(),
-                  NetflixMonitor(), HealthMonitor()],
+                  InsightMonitor(), NetflixMonitor(), HealthMonitor()],
         notify_fn=notify_fn,
     )
 
