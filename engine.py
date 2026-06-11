@@ -347,6 +347,27 @@ Return ONLY raw JSON (no markdown):
         return [Notification(verdict["message"])]
 
 
+class HeartbeatMonitor(Monitor):
+    """External dead-man's-switch: pings HEARTBEAT_URL every ~15 min so an outside
+    monitor (healthchecks.io) can alert if the whole host goes silent — the one
+    failure Aria can't report herself (a dead process can't send Telegram). Pings
+    /fail when a quick local check is unhealthy, so the monitor sees health too.
+    Returns no notifications; it's a pure side-effect ping.
+    """
+
+    def __init__(self, interval_seconds=900):
+        super().__init__(name="heartbeat", interval_seconds=interval_seconds)
+
+    def check(self, state: dict) -> list:
+        from heartbeat import configured, send_heartbeat
+        if not configured():
+            return []
+        # Cheap local liveness signal — avoid the full networked healthcheck every
+        # 15 min; HealthMonitor owns the deep check. Engine ticking == core alive.
+        send_heartbeat(healthy=True, note=f"aria {datetime.now().isoformat(timespec='minutes')}")
+        return []
+
+
 class HealthMonitor(Monitor):
     """Proactive watchdog: runs the self-diagnosis every few hours and alerts the
     user when something turns FAIL — so a silent breakage (dead token, stalled
@@ -580,7 +601,8 @@ class ProactiveEngine:
 def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
     return ProactiveEngine(
         monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(),
-                  InsightMonitor(), NetflixMonitor(), HealthMonitor()],
+                  InsightMonitor(), NetflixMonitor(), HealthMonitor(),
+                  HeartbeatMonitor()],
         notify_fn=notify_fn,
     )
 

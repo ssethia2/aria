@@ -82,7 +82,7 @@
 - [ ] Connector backlog: Apple Notes (AppleScript), others as needed
 - [ ] Reliability / "others can use it" Phase (started 2026-06)
   - [X] healthcheck.py self-diagnosis: doctor CLI + get_system_status tool + startup check + HealthMonitor watchdog
-  - [ ] External dead-man's-switch (healthchecks.io ping) — catches whole-host-down; wire on the Pi
+  - [X] External dead-man's-switch (heartbeat.py + HeartbeatMonitor → HEARTBEAT_URL/healthchecks.io); doctor flags when unset. User sets HEARTBEAT_URL on the Pi.
   - [X] Self-host onboarding: setup.sh (one command), .env.example, USER_EMAIL allowlist fallback, README quick-start, doctor as config validator
   - [ ] First-run interactive wizard (prompt for the 3 required values) — nice-to-have
   - [ ] Decide distribution model: self-hostable (recommended) vs multi-tenant

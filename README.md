@@ -147,7 +147,7 @@ Silent failure is the enemy (a misconfigured cron once failed the briefing for d
 - **Startup check** — the bot self-checks on boot and Telegrams you if it restarted into a broken state.
 - **HealthMonitor** — the engine re-runs the diagnosis every few hours and alerts you when something turns FAIL (deduped to once/day), so breakage becomes a message, not weeks of silence.
 
-**Known limit — the dead-man's-switch gap:** these run *inside* Aria, so they can't detect "the whole host is down." For that, point the bot at an external monitor (e.g. a free healthchecks.io URL it pings on a heartbeat; the external service emails you if pings stop). Recommended once Aria lives on the Pi.
+- **External dead-man's-switch** — the engine pings a `HEARTBEAT_URL` every ~15 min. This catches the one failure the above *can't*: a dead process or powered-off host can't alert you about itself. Create a free check at [healthchecks.io](https://healthchecks.io), set `HEARTBEAT_URL` in `.env` (period ~20m, grace ~10m), and it emails you if the pings stop. Especially important once Aria runs 24/7 on a Pi.
 
 ### Proactivity engine
 While the bot runs, `engine.py` polls in a background thread and Aria reaches out unprompted:

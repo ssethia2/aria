@@ -109,6 +109,13 @@ def check_briefing_today():
     return WARN, "no briefing report for today — did the 08:00 job fire?"
 
 
+def check_heartbeat():
+    import heartbeat
+    if heartbeat.configured():
+        return OK, "external dead-man's-switch active"
+    return WARN, "no HEARTBEAT_URL — a host crash won't alert you (see README → Reliability)"
+
+
 def check_disk():
     free_mb = shutil.disk_usage(BASE).free / 1e6
     if free_mb < 200:
@@ -125,6 +132,7 @@ _CHECKS = [
     ("databases", check_databases),
     ("engine", check_engine_freshness),
     ("briefing", check_briefing_today),
+    ("heartbeat", check_heartbeat),
     ("disk", check_disk),
 ]
 
