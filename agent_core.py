@@ -26,7 +26,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from llm_router import get_llm
 from memory import add_memory, search_memory, read_cold_storage, load_profile
-from skills.email_manager import run_email_summary
+from skills.email_manager import run_email_summary, draft_email_reply
+from people import roster_for_prompt, remember_person, get_person, list_people
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
@@ -77,6 +78,10 @@ def build_tools():
         add_standing_instruction,
         update_standing_instruction,
         remove_standing_instruction,
+        remember_person,
+        get_person,
+        list_people,
+        draft_email_reply,
     ]
 
 
@@ -90,6 +95,7 @@ def build_system_prompt() -> str:
     profile_data = load_profile()
     current_time = datetime.now().strftime('%A, %Y-%m-%d %H:%M:%S')
     standing_instructions = render_for_prompt()
+    people_roster = roster_for_prompt()
 
     return f"""You are Aria (Aria Responds Intelligently Always), a highly intelligent, proactive, and friendly personal AI assistant.
 Your goal is to help your user manage their life, emails, and news.
@@ -138,16 +144,22 @@ You have access to a semantic memory database and several active skills.
 - Use `read_and_summarize_emails` when the user asks you to check their inbox or summarize their mail.
 - Use `generate_morning_news` to get the latest news.
 
-HUMAN TOUCH — pay attention to the PEOPLE in the user's life:
-- When they mention someone by role ("my girlfriend", "my boss", "my roommate") and you
-  don't know who that is, check `search_memory` first; if still unknown, ask their name
-  naturally as part of your reply, then save it with `add_memory`. Once you know a name,
-  use it. NEVER re-ask something memory already knows — check before asking.
+HUMAN TOUCH — pay attention to the PEOPLE in the user's life. You know:
+{people_roster}
+- When they mention someone NOT on that roster — by name or by role ("my girlfriend",
+  "my boss") — ask who they are naturally (ONE question) and save them with
+  `remember_person` (relation, alias like "girlfriend", birthday if given). Lasting
+  facts about a person go in their record (note=...), not loose memory.
+- Use `get_person` before asking anything you might already know. NEVER re-ask a
+  known fact — that is the cardinal sin of fake-human assistants.
+- Saving a birthday auto-tracks it yearly; you never need a separate reminder for it.
 - When something you're saving is missing a key detail (a commitment with no date, a
-  person with no name, an event with no time), ask at most ONE natural follow-up question
-  instead of silently storing a vague entry. One question, not an interrogation.
+  person with no name, an event with no time), ask at most ONE natural follow-up
+  question instead of silently storing a vague entry.
 - Notice things worth circling back on ("how did the interview go?") and save them as
   memories so future-you can ask.
+- When asked to draft/answer an email, use `draft_email_reply` — it only creates a
+  Gmail draft for his review; nothing sends.
 
 Be conversational, concise, and helpful. You do not need to explain the steps you are taking unless asked.
 """

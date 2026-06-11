@@ -52,6 +52,41 @@ class TestSendEmailAllowlist(unittest.TestCase):
         self.assertTrue(send_call.called)
 
 
+class TestDraftReply(unittest.TestCase):
+    def _service(self):
+        service = MagicMock()
+        service.users.return_value.messages.return_value.list.return_value \
+            .execute.return_value = {'messages': [{'id': 'm1'}]}
+        service.users.return_value.messages.return_value.get.return_value \
+            .execute.return_value = {
+                'threadId': 'thread9',
+                'payload': {'headers': [
+                    {'name': 'From', 'value': 'Rohan <rohan@x.com>'},
+                    {'name': 'Subject', 'value': 'Trip plans?'},
+                    {'name': 'Message-ID', 'value': '<abc@mail>'}]}}
+        return service
+
+    def test_creates_threaded_draft_and_sends_nothing(self):
+        service = self._service()
+        with patch.object(email_manager, 'get_gmail_service', return_value=service):
+            msg = email_manager.draft_email_reply.invoke({
+                'search_query': 'from:rohan trip', 'body': 'Listings coming Friday!'})
+        draft_call = service.users.return_value.drafts.return_value.create
+        draft_call.assert_called_once()
+        self.assertEqual(draft_call.call_args.kwargs['body']['message']['threadId'], 'thread9')
+        service.users.return_value.messages.return_value.send.assert_not_called()
+        self.assertIn('Nothing was sent', msg)
+
+    def test_no_match_reports_cleanly(self):
+        service = self._service()
+        service.users.return_value.messages.return_value.list.return_value \
+            .execute.return_value = {}
+        with patch.object(email_manager, 'get_gmail_service', return_value=service):
+            msg = email_manager.draft_email_reply.invoke({
+                'search_query': 'from:nobody', 'body': 'x'})
+        self.assertIn("Couldn't find", msg)
+
+
 class TestAllowlistFailSafe(unittest.TestCase):
     def test_gcs_failure_falls_back_to_local_allowlist(self):
         """GCS unreachable + allow.json present → local list is used (ADR 0005)."""

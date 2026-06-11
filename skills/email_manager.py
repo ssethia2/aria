@@ -204,6 +204,50 @@ def send_email(service, to_email, subject, body_text):
     except HttpError as error:
         print(f"❌ An error occurred sending the email: {error}")
         return None
+@tool
+def draft_email_reply(search_query: str, body: str) -> str:
+    """Write a reply to an email as a DRAFT in the user's Gmail — nothing is sent;
+    he reviews and hits send himself. Use when he asks you to draft/answer/respond
+    to an email (often one you flagged as a reply owed).
+
+    Args:
+        search_query: Gmail search to find the email being replied to
+            (e.g. 'from:rohan trip plans', 'subject:"apartment listings"').
+        body: The reply text, written in the user's voice — concise, no signature.
+    """
+    service = get_gmail_service()
+    if not service:
+        return "Gmail isn't available right now."
+
+    found = service.users().messages().list(
+        userId='me', q=search_query, maxResults=1).execute().get('messages', [])
+    if not found:
+        return f"Couldn't find an email matching {search_query!r}."
+
+    msg = service.users().messages().get(
+        userId='me', id=found[0]['id'], format='metadata',
+        metadataHeaders=['From', 'Subject', 'Message-ID']).execute()
+    headers = {h['name']: h['value'] for h in msg['payload'].get('headers', [])}
+    sender = headers.get('From', '')
+    subject = headers.get('Subject', '')
+    message_id = headers.get('Message-ID', '')
+
+    reply = EmailMessage()
+    reply.set_content(body)
+    reply['To'] = sender
+    reply['Subject'] = subject if subject.lower().startswith('re:') else f"Re: {subject}"
+    if message_id:  # keeps Gmail threading the reply correctly
+        reply['In-Reply-To'] = message_id
+        reply['References'] = message_id
+
+    raw = base64.urlsafe_b64encode(reply.as_bytes()).decode()
+    service.users().drafts().create(
+        userId='me',
+        body={'message': {'raw': raw, 'threadId': msg.get('threadId')}}).execute()
+    return (f"Draft reply to {sender} created — it's sitting in Gmail Drafts "
+            f"for review. Nothing was sent.")
+
+
 def run_email_summary():
     """Fetches and processes recent emails from the Gmail API."""
     print("Running Pilot Skill: Email Summary...")
