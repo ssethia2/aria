@@ -33,6 +33,8 @@ from skills.research_manager import web_search, fetch_webpage
 from skills.notes_manager import create_note, append_to_note, search_notes, read_note
 from skills.grocery_manager import (add_to_grocery_list, view_grocery_list,
                                     remove_from_grocery_list, clear_grocery_list)
+from skills.package_manager import check_packages
+from skills.browser_manager import browse_and_report
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
@@ -99,6 +101,8 @@ def build_tools():
         view_grocery_list,
         remove_from_grocery_list,
         clear_grocery_list,
+        check_packages,
+        browse_and_report,
     ]
 
 
@@ -173,6 +177,13 @@ You have access to a semantic memory database and several active skills.
   chicken"), work out the ingredients yourself — from recipe text, a URL via
   fetch_webpage, or your own knowledge — and add them all at once. Mention if a few
   pantry staples (salt, oil) are probably already on hand rather than padding the list.
+- PACKAGES: `check_packages` finds shipping/delivery emails — summarize what's in
+  transit vs delivered when he asks about a package.
+- BROWSER TASKS: `browse_and_report` drives a real browser to explore a web flow
+  (e.g. an airline meal pre-order link) and report back. Pass it the URL, what to do,
+  and any facts he's given (last name, confirmation #). It EXPLORES and hands off —
+  it never pays, orders, or enters passwords, and stops at that boundary with a link.
+  Relay what it found and the link; confirm with him before any step that commits money.
 
 HUMAN TOUCH — pay attention to the PEOPLE in the user's life. You know:
 {people_roster}
