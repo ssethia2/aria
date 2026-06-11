@@ -1,16 +1,21 @@
-"""Unified LLM factory with a built-in fallback chain (see docs/adr/0001).
+"""Unified LLM factory with tiered, provider-fallback model chains (see docs/adr/0001).
 
-All modules obtain their chat model via get_llm() rather than calling a provider
-SDK directly. Two tiers:
-  - standard: Claude Opus 4.8 -> Claude Sonnet 4.6 -> Gemini Flash (agent, briefing)
-  - light:    Claude Haiku 4.5 -> Gemini Flash (high-frequency background screening)
+Every module gets its model via get_llm(tier=...) — never a provider SDK directly. Three
+tiers, each an ordered chain that falls through on error/rate-limit (LangChain
+.with_fallbacks), so a quota wall or outage degrades instead of breaking:
 
-When a chain link fails at invoke time the user is told via Telegram (once per model
-per day) — silent fallback masked the claude-3 retirements for months in 2026.
+  heavy    : Opus 4.8 -> Sonnet 4.6 -> Gemini   (agentic multi-step: browser, complex)
+  standard : Sonnet 4.6 -> Opus 4.8 -> Gemini   (chat agent, insight, news, compaction)
+  light    : Gemini (free tier) -> Haiku 4.5     (high-frequency screening/judgment —
+             leads with the free model and falls to cheap paid Haiku when it 429s,
+             the "use free while it lasts" strategy, scoped to low-stakes work)
 
-Model lineup current as of 2026-06 (claude-3-opus / claude-3-5-sonnet were retired
-by Anthropic in early 2026 and now 404). Note: Opus 4.8 removed sampling params —
-do NOT pass temperature to it (400 error); it is still applied to the fallbacks.
+Adding a provider (Groq/OpenRouter free models, etc.) = one more (name, factory) entry
+in a chain; the fallback machinery is provider-agnostic.
+
+When a chain link fails at invoke time the user is told via Telegram (once per model per
+day) — EXCEPT the light tier, whose free-primary is *expected* to exhaust daily and
+fall through silently. Model lineup current as of 2026-06.
 """
 import json
 import os
@@ -25,6 +30,32 @@ load_dotenv()
 ALERT_STATE_PATH = os.path.join(os.path.dirname(__file__), "router_alerts.json")
 
 
+# --- model factories (Opus 4.8 rejects sampling params, so it ignores temperature) ---
+def _opus(t):
+    return ChatAnthropic(model="claude-opus-4-8")
+
+
+def _sonnet(t):
+    return ChatAnthropic(model="claude-sonnet-4-6", temperature=t)
+
+
+def _haiku(t):
+    return ChatAnthropic(model="claude-haiku-4-5", temperature=t)
+
+
+def _gemini(t):
+    return ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=t)
+
+
+TIERS = {
+    "heavy":    [("claude-opus-4-8", _opus), ("claude-sonnet-4-6", _sonnet),
+                 ("gemini-2.5-flash", _gemini)],
+    "standard": [("claude-sonnet-4-6", _sonnet), ("claude-opus-4-8", _opus),
+                 ("gemini-2.5-flash", _gemini)],
+    "light":    [("gemini-2.5-flash", _gemini), ("claude-haiku-4-5", _haiku)],
+}
+
+
 def _notify_fallback_once(model_name: str, error: str):
     """Telegram the user that a chain link is failing — at most once per model per day."""
     today = date.today().isoformat()
@@ -33,7 +64,6 @@ def _notify_fallback_once(model_name: str, error: str):
             state = json.load(f)
     except Exception:
         state = {}
-
     if state.get(model_name) == today:
         return
     state[model_name] = today
@@ -42,116 +72,47 @@ def _notify_fallback_once(model_name: str, error: str):
             json.dump(state, f, indent=2)
     except Exception as e:
         print(f"[router] couldn't persist alert state: {e}")
-
     from notify import send_telegram
     send_telegram(
         f"⚠️ Heads up: my model '{model_name}' is failing and I've switched to a fallback.\n\n"
         f"Error: {error}\n\n"
         f"I'll keep working, but if this persists the lineup in llm_router.py may need "
-        f"updating (e.g. a retired model ID). I'll only mention this once today."
-    )
+        f"updating (e.g. a retired model ID). I'll only mention this once today.")
 
 
 def _with_failure_alert(model, model_name: str):
-    """Attach an on-error listener so invoke-time failures surface to the user."""
     def on_error(run, *args, **kwargs):
         try:
             _notify_fallback_once(model_name, str(getattr(run, "error", "unknown"))[:300])
         except Exception as e:
             print(f"[router] fallback-alert hook failed: {e}")
-
     return model.with_listeners(on_error=on_error)
 
 
-def _build_chain(specs):
+def _build_chain(specs, alert=True):
     """Init each (name, factory) spec, drop init failures, return anchor.with_fallbacks(rest).
-
-    Every link except the last gets a failure-alert listener — if the LAST link fails
-    the whole chain raises, and the caller's own fail-loud path reports it.
-    """
+    Non-last links get a failure-alert listener when alert=True (off for the light tier,
+    whose free-primary is expected to fall through daily)."""
     models = []
     for name, build in specs:
         try:
             models.append((name, build()))
         except Exception as e:
             print(f"Warning: LLM init failed for {name}: {e}")
-
     if not models:
         raise ValueError("CRITICAL ERROR: No LLMs could be initialized. Check your API Keys in .env")
-
     wrapped = [
-        _with_failure_alert(model, name) if i < len(models) - 1 else model
-        for i, (name, model) in enumerate(models)
+        _with_failure_alert(m, name) if (alert and i < len(models) - 1) else m
+        for i, (name, m) in enumerate(models)
     ]
     anchor, fallbacks = wrapped[0], wrapped[1:]
     return anchor.with_fallbacks(fallbacks) if fallbacks else anchor
 
 
-_whisper_model = None
-
-
-def _get_whisper():
-    """Lazy-load the local Whisper model (downloads once, then cached).
-
-    ARIA_WHISPER_MODEL tunes size per host: 'base' (default, Mac) vs 'tiny'
-    (~3x faster — right for a Pi 4's slower CPU).
-    """
-    global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        size = os.getenv("ARIA_WHISPER_MODEL", "base")
-        _whisper_model = WhisperModel(size, device="cpu", compute_type="int8")
-    return _whisper_model
-
-
-def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
-    """Transcribe a voice recording. Local Whisper first (no quota, offline, private —
-    the Gemini free tier is capped at ~20 req/day, which broke voice on day one);
-    Gemini multimodal as fallback. Lives here so provider access stays centralized.
-    """
-    import io
-
-    try:
-        segments, _info = _get_whisper().transcribe(io.BytesIO(audio_bytes))
-        text = " ".join(s.text.strip() for s in segments).strip()
-        if text:
-            return text
-        print("[stt] local whisper heard nothing; trying Gemini")
-    except Exception as e:
-        print(f"[stt] local whisper failed ({e}); falling back to Gemini")
-
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        config=types.GenerateContentConfig(
-            system_instruction=(
-                "You are a speech-to-text engine. Output the verbatim transcript of "
-                "the audio and NOTHING else — no preamble, no commentary, no quotes, "
-                "no repetition. If the audio contains no speech, output nothing."),
-            temperature=0),
-        contents=[types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)])
-    return (response.text or "").strip()
-
-
 def get_llm(temperature=0, tier="standard"):
-    """
-    Returns a unified LangChain ChatModel with built-in fallbacks.
-
-    tier="standard": Opus 4.8 -> Sonnet 4.6 -> Gemini Flash (most capable first)
-    tier="light":    Haiku 4.5 -> Gemini Flash (cheap + fast, for frequent background calls)
-    """
-    if tier == "light":
-        return _build_chain([
-            ("claude-haiku-4-5", lambda: ChatAnthropic(model="claude-haiku-4-5", temperature=temperature)),
-            ("gemini-2.5-flash", lambda: ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=temperature)),
-        ])
-
-    return _build_chain([
-        # Opus 4.8 rejects sampling params (temperature would 400) — omit it.
-        ("claude-opus-4-8", lambda: ChatAnthropic(model="claude-opus-4-8")),
-        ("claude-sonnet-4-6", lambda: ChatAnthropic(model="claude-sonnet-4-6", temperature=temperature)),
-        ("gemini-2.5-flash", lambda: ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=temperature)),
-    ])
+    """Return a tiered ChatModel with built-in fallbacks. See module docstring for tiers."""
+    specs = TIERS.get(tier, TIERS["standard"])
+    chain = []
+    for name, factory in specs:
+        chain.append((name, lambda t=temperature, f=factory: f(t)))
+    return _build_chain(chain, alert=(tier != "light"))

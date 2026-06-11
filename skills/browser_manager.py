@@ -196,7 +196,7 @@ def browse_and_report(task: str, start_url: str, facts: str = None,
             page = context.new_page()
             page.goto(start_url, wait_until='domcontentloaded', timeout=30000)
             page.wait_for_timeout(1500)
-            result = _drive(page, task, facts, get_llm(temperature=0))
+            result = _drive(page, task, facts, get_llm(temperature=0, tier="heavy"))
             browser.close()
             return result
     except Exception as e:
