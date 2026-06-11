@@ -5,7 +5,7 @@ env/
 
 # Credentials & Personal Data
 credentials.json
-token.json
+token*.json
 profile.json
 
 # Python artifacts
@@ -31,6 +31,17 @@ wheels/
 
 # Output & Reports
 reports/
+
+# Runtime state (memory, calendar, conversation checkpoints)
+chroma_db/
+cold_storage/
+daily_scratchpad.txt
+*.db
+*.db-shm
+*.db-wal
+logs/
+engine_state.json
+router_alerts.json
 
 # OS generated files
 .DS_Store
