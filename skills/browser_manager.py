@@ -145,13 +145,24 @@ def _drive(page, task: str, facts: str, llm) -> str:
             f"you can take over:\n{page.url}")
 
 
+def _session_file(session: str):
+    """Path to a saved login session from browser_login.py, if it exists."""
+    if not session:
+        return None
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                        'browser_sessions', f"{session}.json")
+    return path if os.path.exists(path) else None
+
+
 @tool
-def browse_and_report(task: str, start_url: str, facts: str = None) -> str:
+def browse_and_report(task: str, start_url: str, facts: str = None,
+                      session: str = None) -> str:
     """Drive a real browser to explore a web task and report back — for things like
     "open this airline pre-order link, enter my last name, and tell me the meal
-    options" or navigating toward a cart. You EXPLORE and tee things up; you never
-    pay, place orders, or enter passwords — you stop at that boundary and hand the
-    user the link.
+    options" or navigating a logged-in site toward a cart. You EXPLORE and tee things
+    up; you never pay, place orders, or enter passwords — you stop at that boundary
+    and hand the user the link.
 
     Args:
         task: What to accomplish and what to report (e.g. "find my meal choices and
@@ -159,17 +170,29 @@ def browse_and_report(task: str, start_url: str, facts: str = None) -> str:
         start_url: The URL to begin at (e.g. the link from an email).
         facts: Any data you may enter on the user's behalf — last name, confirmation
             number, etc. Provide only what the user has actually given you.
+        session: Name of a saved login session to reuse (e.g. "amazon") so you act
+            already-signed-in. Only works if the user has run browser_login.py for
+            that site; if a logged-in site asks you to sign in, tell the user to set
+            up the session rather than attempting to log in yourself.
     """
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
         return "The browser engine isn't installed on this host."
+
+    storage = _session_file(session)
+    if session and not storage:
+        return (f"I don't have a saved '{session}' login session — run "
+                f"`python3 browser_login.py {session} <url>` once so I can act as you there.")
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=(
+            ctx_kwargs = {'user_agent': (
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 '
-                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'))
+                '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')}
+            if storage:
+                ctx_kwargs['storage_state'] = storage
+            context = browser.new_context(**ctx_kwargs)
             page = context.new_page()
             page.goto(start_url, wait_until='domcontentloaded', timeout=30000)
             page.wait_for_timeout(1500)
