@@ -91,11 +91,16 @@ _whisper_model = None
 
 
 def _get_whisper():
-    """Lazy-load the local Whisper model (downloads ~150MB once, then cached)."""
+    """Lazy-load the local Whisper model (downloads once, then cached).
+
+    ARIA_WHISPER_MODEL tunes size per host: 'base' (default, Mac) vs 'tiny'
+    (~3x faster — right for a Pi 4's slower CPU).
+    """
     global _whisper_model
     if _whisper_model is None:
         from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+        size = os.getenv("ARIA_WHISPER_MODEL", "base")
+        _whisper_model = WhisperModel(size, device="cpu", compute_type="int8")
     return _whisper_model
 
 

@@ -39,9 +39,11 @@ rsync -av --ignore-missing-args \
 This carries her entire mind: memories (chroma), conversations (checkpoints),
 commitments, standing instructions, engine state, and all credentials.
 
-**.env tweak on the Pi:** remove `ALLOWLIST_BUCKET_NAME` (GCP is gone; the local
-`allow.json` fallback is the allowlist now — removing the var skips the noisy
-GCS attempt on every send).
+**.env tweaks on the Pi:**
+- remove `ALLOWLIST_BUCKET_NAME` (GCP is gone; the local `allow.json` fallback is
+  the allowlist now — removing the var skips the noisy GCS attempt on every send)
+- on a **Pi 4**, add `ARIA_WHISPER_MODEL=tiny` (~3x faster voice transcription on
+  its slower CPU; `base` is right for a Pi 5 or the Mac)
 
 ## 4. Smoke test (on the Pi)
 ```bash
