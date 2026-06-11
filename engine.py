@@ -1,0 +1,469 @@
+"""Aria's proactivity engine — she notices things and reaches out unprompted.
+
+A background loop of pluggable Monitors, each polled on its own interval:
+  - CommitmentMonitor:  pings timed commitments at their moment (date-only ones
+                        surface in the briefing/digest instead — no random pings)
+  - EmailDigestMonitor: LLM-screens new mail; flagged items accumulate into ONE
+                        evening digest, and replies-owed become tracked commitments
+  - NetflixMonitor:     spots a fresh "Update Netflix Household" email, runs the
+                        browser automation immediately, reports the outcome
+
+Quiet hours (23:00–08:00 by default): monitors still RUN and act, but notifications
+queue and flush as one "while you were away" digest in the morning. Notifications
+marked urgent bypass quiet hours. State (seen ids, queued pings) persists in
+engine_state.json so restarts don't re-notify or drop the queue.
+
+Runs as a daemon thread inside telegram_bot.py (start_engine_thread). Standalone:
+`python3 engine.py --once` for a single tick, `python3 engine.py` to loop forever.
+Set ARIA_ENGINE_DISABLED=1 to keep the bot from starting it.
+"""
+import json
+import os
+import re
+import sys
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+
+from dotenv import load_dotenv
+
+from notify import send_telegram
+
+load_dotenv()
+
+STATE_PATH = os.path.join(os.path.dirname(__file__), "engine_state.json")
+
+_llm = None
+
+
+def _get_llm():
+    """Lazy, cached router LLM — light tier: screening runs every 15 min, cost matters."""
+    global _llm
+    if _llm is None:
+        from llm_router import get_llm
+        _llm = get_llm(temperature=0, tier="light")
+    return _llm
+
+
+def load_state() -> dict:
+    if not os.path.exists(STATE_PATH):
+        return {}
+    try:
+        with open(STATE_PATH) as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[engine] ⚠️ corrupt state file, starting fresh: {e}")
+        return {}
+
+
+def save_state(state: dict):
+    with open(STATE_PATH, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+@dataclass
+class Notification:
+    text: str
+    urgent: bool = False  # urgent notifications bypass quiet hours
+
+
+def _parse_llm_json(content: str):
+    """Extract the first JSON array/object from an LLM reply.
+
+    Light-tier models wrap output in ```json fences and add commentary despite
+    instructions (seen live 2026-06-10); a plain json.loads chokes on that.
+    Raises json.JSONDecodeError if no JSON is found.
+    """
+    match = re.search(r'\[.*\]|\{.*\}', content, re.DOTALL)
+    if not match:
+        raise json.JSONDecodeError("no JSON block found", content, 0)
+    return json.loads(match.group(0))
+
+
+def _record_to_memory(text: str):
+    """Mirror an engine notification into Aria's working memory (Tier 1 scratchpad).
+
+    Engine actions bypass the agent loop, so without this chat-Aria has no idea what
+    her proactive side did and will deny it when asked — the split-brain problem.
+    """
+    try:
+        import memory
+        stamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+        line = f"{memory.ACTION_LOG_PREFIX}, {stamp}] " + " ".join(text.split())
+        with open(memory.SCRATCHPAD_PATH, "a") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        print(f"[engine] ⚠️ couldn't record action to memory: {e}")
+
+
+@dataclass
+class Monitor:
+    """Base class: subclasses set name/interval and implement check(state).
+
+    check() may mutate `state` (its slice of engine_state.json) and returns a list
+    of Notification. It must not raise for routine failures — but the engine guards
+    every call anyway, so one broken monitor never takes down the rest.
+    """
+    name: str = "monitor"
+    interval_seconds: int = 300
+    _next_due: float = field(default=0.0, repr=False)
+
+    def check(self, state: dict) -> list:
+        raise NotImplementedError
+
+
+class CommitmentMonitor(Monitor):
+    """Pings timed commitments at their moment (within ~2 min).
+
+    Date-only commitments deliberately do NOT ping — a random 8 AM buzz for "sometime
+    today" erodes trust. They surface in the morning briefing and evening digest.
+    """
+
+    def __init__(self, interval_seconds=120, now_fn=None):
+        super().__init__(name="commitments", interval_seconds=interval_seconds)
+        self.now_fn = now_fn or datetime.now
+
+    def check(self, state: dict) -> list:
+        from skills.commitment_manager import get_timed_due_now
+
+        now = self.now_fn()
+        today = now.strftime('%Y-%m-%d')
+        notified = set(state.get("notified", {}).get(today, []))
+
+        out = []
+        for c in get_timed_due_now(now):
+            if c["id"] in notified:
+                continue
+            who = f" ({c['who']})" if c.get('who') else ""
+            out.append(Notification(
+                f"⏰ {c['description']}{who} — scheduled for {c['due_time']}"))
+            notified.add(c["id"])
+
+        state["notified"] = {today: sorted(notified)}
+        return out
+
+
+class EmailDigestMonitor(Monitor):
+    """Screens new inbox mail but NEVER pings instantly: flagged items accumulate and
+    go out as ONE evening digest (~18:00). Emails that need a reply also become
+    reply_owed commitments, so the chase loop owns them.
+
+    (Design per the 2026-06 needs interview: <5 decision-emails/day — instant pings
+    were noise; a digest plus tracked replies-owed is the right weight.)
+    """
+
+    SCREEN_PROMPT = """You are screening a user's incoming email for a twice-daily digest.
+Flag emails that are time-sensitive, personally significant, or need the user to act —
+especially a real person awaiting a reply, bills due, security alerts, travel changes.
+Newsletters, promotions, receipts, and social notifications are NEVER flagged.
+
+Emails (JSON):
+{emails}
+
+Return ONLY a raw JSON array (no markdown), one object per flagged email:
+[{{"id": "<email id>", "reason": "<one short sentence>", "needs_reply": true/false}}]
+needs_reply is true ONLY when a real person is waiting on the user's response.
+Return [] if nothing qualifies — that should be the common case."""
+
+    DIGEST_HOUR = 18  # evening flush; the 08:00 briefing covers the morning side
+
+    def __init__(self, interval_seconds=900, now_fn=None):
+        super().__init__(name="email-digest", interval_seconds=interval_seconds)
+        self.now_fn = now_fn or datetime.now
+
+    def check(self, state: dict) -> list:
+        self._screen_new_mail(state)
+        return self._maybe_flush_digest(state)
+
+    def _screen_new_mail(self, state: dict):
+        from skills.email_manager import get_gmail_service
+
+        service = get_gmail_service()
+        if not service:
+            print("[engine] email-digest: no Gmail service, skipping tick")
+            return
+
+        now_ts = time.time()
+        last_ts = state.get("last_check_ts", now_ts - self.interval_seconds)
+        # 2-minute overlap so boundary emails aren't missed; dedupe handles repeats.
+        query = f"in:inbox after:{int(last_ts - 120)}"
+        resp = service.users().messages().list(
+            userId='me', q=query, maxResults=20).execute()
+        ids = [m['id'] for m in resp.get('messages', [])]
+
+        seen = state.get("seen_ids", [])
+        new_ids = [i for i in ids if i not in seen]
+        state["last_check_ts"] = now_ts
+        state["seen_ids"] = (seen + new_ids)[-300:]
+        if not new_ids:
+            return
+
+        emails = []
+        for msg_id in new_ids:
+            msg = service.users().messages().get(userId='me', id=msg_id).execute()
+            headers = msg['payload'].get('headers', [])
+            emails.append({
+                'id': msg_id,
+                'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject'),
+                'sender': next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown'),
+                'snippet': msg.get('snippet', ''),
+            })
+
+        print(f"[engine] email-digest: screening {len(emails)} new email(s)")
+        response = _get_llm().invoke(
+            self.SCREEN_PROMPT.format(emails=json.dumps(emails, indent=2)))
+        content = response.content
+        if isinstance(content, list):
+            content = next((b['text'] for b in content
+                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        try:
+            flagged = _parse_llm_json(content)
+        except json.JSONDecodeError:
+            print(f"[engine] email-digest: unparseable screen result: {content[:200]}")
+            return
+
+        from skills import commitment_manager
+        by_id = {e['id']: e for e in emails}
+        converted = state.get("reply_commitment_ids", [])
+        for item in flagged:
+            email = by_id.get(item.get('id'))
+            if not email:
+                continue
+            entry = {"sender": email['sender'], "subject": email['subject'],
+                     "reason": item.get('reason', '')}
+            if item.get('needs_reply') and email['id'] not in converted:
+                sender_name = email['sender'].split('<')[0].strip(' "') or email['sender']
+                due = (self.now_fn() + timedelta(days=2)).strftime('%Y-%m-%d')
+                cid = commitment_manager.add(
+                    description=f"Reply to {sender_name}: {email['subject']}",
+                    kind='reply_owed', who=sender_name, due_date=due, source='email')
+                converted.append(email['id'])
+                entry["tracked"] = f"#{cid}"
+            state.setdefault("pending_digest", []).append(entry)
+        state["reply_commitment_ids"] = converted[-300:]
+
+    def _maybe_flush_digest(self, state: dict) -> list:
+        now = self.now_fn()
+        today = now.strftime('%Y-%m-%d')
+        if now.hour < self.DIGEST_HOUR or state.get("digest_date") == today:
+            return []
+        state["digest_date"] = today
+        items = state.get("pending_digest", [])
+        if not items:
+            return []
+        state["pending_digest"] = []
+        lines = []
+        tracked = 0
+        for it in items:
+            line = f"• {it['sender']} — “{it['subject']}”: {it['reason']}"
+            if it.get("tracked"):
+                line += f" (tracking reply as {it['tracked']})"
+                tracked += 1
+            lines.append(line)
+        header = "📬 Evening inbox digest:"
+        footer = (f"\n\nI'm tracking {tracked} reply(ies) you owe — "
+                  "they'll be in tomorrow's briefing too.") if tracked else ""
+        return [Notification(header + "\n" + "\n".join(lines) + footer)]
+
+
+class ChaseMonitor(Monitor):
+    """The chase loop: judgment-based nudges so open commitments don't quietly age out.
+
+    A few times a day (daytime only), the light-tier LLM reviews open commitments and
+    decides whether ONE short nudge is worth sending — overdue items, things due soon,
+    aging replies, stale undated promises. Conservative by design: silence is the
+    default, at most one nudge per day, and a commitment isn't re-nudged for days.
+    """
+
+    PROMPT = """You are Aria's judgment for whether to proactively nudge her user about open
+commitments. Default to SILENCE — most checks should send nothing. A nudge is warranted
+only for: something OVERDUE, something due today or tomorrow where lead time helps, a
+reply owed that is several days old, or an undated commitment open for 7+ days (gently
+ask whether it's still happening). Never re-nudge a commitment whose last_nudged is
+within the past 3 days.
+
+If a nudge IS warranted, write ONE short, warm message as Aria in first person — natural
+and specific, zero nagging tone. Fold multiple items into that one message.
+
+Today: {today}
+Open commitments (JSON):
+{commitments}
+
+Return ONLY raw JSON (no markdown):
+{{"send": true/false, "message": "<the message, or empty>", "commitment_ids": [<ids referenced>]}}"""
+
+    def __init__(self, interval_seconds=10800, now_fn=None):
+        super().__init__(name="chase", interval_seconds=interval_seconds)
+        self.now_fn = now_fn or datetime.now
+
+    def check(self, state: dict) -> list:
+        now = self.now_fn()
+        if not (10 <= now.hour < 21):
+            return []  # daytime judgment only; mornings belong to the briefing
+        today = now.strftime('%Y-%m-%d')
+        if state.get("nudge_sent_date") == today:
+            return []  # at most one nudge per day
+
+        from skills.commitment_manager import get_open_commitments
+        open_ = get_open_commitments()
+        if not open_:
+            return []
+
+        nudged = state.get("nudged", {})
+        for c in open_:
+            c["last_nudged"] = nudged.get(str(c["id"]))
+
+        response = _get_llm().invoke(
+            self.PROMPT.format(today=today, commitments=json.dumps(open_, indent=2)))
+        content = response.content
+        if isinstance(content, list):
+            content = next((b['text'] for b in content
+                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        try:
+            verdict = _parse_llm_json(content)
+        except json.JSONDecodeError:
+            print(f"[engine] chase: unparseable verdict: {content[:200]}")
+            return []
+
+        if not verdict.get("send") or not verdict.get("message"):
+            return []
+
+        for cid in verdict.get("commitment_ids", []):
+            nudged[str(cid)] = today
+        state["nudged"] = nudged
+        state["nudge_sent_date"] = today
+        return [Notification(verdict["message"])]
+
+
+class NetflixMonitor(Monitor):
+    """Acts the moment a household-update email lands; the *report* can wait.
+
+    This replaces the planned ngrok + Pub/Sub push pipeline (see ADR 0004): a few
+    minutes of polling latency in exchange for zero public-facing infrastructure.
+    """
+
+    def __init__(self, interval_seconds=30):
+        # 30s: someone is standing at the TV waiting. A messages.list every 30s is
+        # ~5 Gmail quota units against a 15,000/min allowance — effectively free.
+        super().__init__(name="netflix", interval_seconds=interval_seconds)
+
+    def check(self, state: dict) -> list:
+        from skills.netflix_manager import (get_netflix_gmail_service,
+                                            update_netflix_household,
+                                            HOUSEHOLD_EMAIL_QUERY)
+
+        service = get_netflix_gmail_service()
+        if not service:
+            return []  # secondary token not set up — not an error worth nagging about
+
+        resp = service.users().messages().list(
+            userId='me', q=f"({HOUSEHOLD_EMAIL_QUERY}) newer_than:1d",
+            maxResults=1).execute()
+        messages = resp.get('messages', [])
+        if not messages:
+            return []
+
+        msg_id = messages[0]['id']
+        if msg_id == state.get("last_handled_id"):
+            return []
+
+        print(f"[engine] netflix: new household email {msg_id}, acting now")
+        state["last_handled_id"] = msg_id
+        result = update_netflix_household.invoke({})
+        return [Notification(
+            f"📺 A Netflix household-update email arrived — I acted on it.\n{result}")]
+
+
+class ProactiveEngine:
+    """Drives the monitors, enforces quiet hours, owns the notification queue."""
+
+    def __init__(self, monitors, notify_fn=send_telegram, quiet_hours=(23, 8),
+                 tick_seconds=30):
+        self.monitors = monitors
+        self.notify_fn = notify_fn
+        self.quiet_start, self.quiet_end = quiet_hours
+        self.tick_seconds = tick_seconds
+
+    def in_quiet_hours(self, now: datetime = None) -> bool:
+        hour = (now or datetime.now()).hour
+        if self.quiet_start > self.quiet_end:  # window wraps midnight, e.g. 23 -> 8
+            return hour >= self.quiet_start or hour < self.quiet_end
+        return self.quiet_start <= hour < self.quiet_end
+
+    def tick(self, now_monotonic: float = None, now: datetime = None):
+        now_monotonic = time.monotonic() if now_monotonic is None else now_monotonic
+        state = load_state()
+        new_notifications = []
+
+        for monitor in self.monitors:
+            if now_monotonic < monitor._next_due:
+                continue
+            monitor._next_due = now_monotonic + monitor.interval_seconds
+            try:
+                slice_ = state.setdefault(monitor.name, {})
+                new_notifications.extend(monitor.check(slice_) or [])
+            except Exception as e:
+                # One broken monitor must never take down the engine or the bot.
+                print(f"[engine] ⚠️ monitor '{monitor.name}' failed: {e}")
+
+        queue = state.setdefault("queued_notifications", [])
+        quiet = self.in_quiet_hours(now)
+
+        for n in new_notifications:
+            # Whatever happens to the *ping*, the action itself goes into Aria's
+            # working memory so the chat agent can answer "what did you do?".
+            _record_to_memory(n.text)
+            if quiet and not n.urgent:
+                print(f"[engine] quiet hours — queued: {n.text[:60]!r}")
+                queue.append(n.text)
+            else:
+                self.notify_fn(n.text)
+
+        if not quiet and queue:
+            digest = "🌅 While you were away:\n\n" + "\n\n".join(f"• {t}" for t in queue)
+            if self.notify_fn(digest):
+                state["queued_notifications"] = []
+
+        save_state(state)
+
+    def run_forever(self, stop_event: threading.Event = None):
+        print(f"[engine] 🫀 Proactivity engine online — monitors: "
+              f"{', '.join(m.name for m in self.monitors)} "
+              f"(quiet hours {self.quiet_start:02d}:00–{self.quiet_end:02d}:00)")
+        while not (stop_event and stop_event.is_set()):
+            try:
+                self.tick()
+            except Exception as e:
+                print(f"[engine] ⚠️ tick failed: {e}")
+            time.sleep(self.tick_seconds)
+
+
+def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
+    return ProactiveEngine(
+        monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(), NetflixMonitor()],
+        notify_fn=notify_fn,
+    )
+
+
+def start_engine_thread(notify_fn=None) -> threading.Thread:
+    """Start the engine as a daemon thread (used by telegram_bot.py).
+
+    notify_fn lets the host process enrich delivery — the bot passes one that both
+    telegrams the user AND appends the message to the conversation thread, so the
+    agent's history matches what the user saw.
+    """
+    engine = default_engine(notify_fn=notify_fn or send_telegram)
+    thread = threading.Thread(target=engine.run_forever, name="aria-engine", daemon=True)
+    thread.start()
+    return thread
+
+
+if __name__ == "__main__":
+    engine = default_engine()
+    if "--once" in sys.argv:
+        # Force every monitor due, run one tick, and exit — for manual testing.
+        engine.tick()
+        print("[engine] single tick complete")
+    else:
+        engine.run_forever()

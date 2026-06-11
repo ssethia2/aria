@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Aria's Telegram bot: starts at login, restarts on crash (KeepAlive). -->
+    <key>Label</key>
+    <string>com.aria.telegram-bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/satviksethia/Documents/personal-assistant/venv/bin/python3</string>
+        <string>-u</string>
+        <string>telegram_bot.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/satviksethia/Documents/personal-assistant</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Don't restart-loop faster than every 10s if it's crashing on boot -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/satviksethia/Documents/personal-assistant/logs/telegram_bot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/satviksethia/Documents/personal-assistant/logs/telegram_bot.err.log</string>
+</dict>
+</plist>

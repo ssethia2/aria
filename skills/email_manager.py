@@ -1,3 +1,9 @@
+"""Email skill — the shared Gmail gateway for the whole project.
+
+Owns OAuth/token handling (get_gmail_service), restricted scopes, the allowlist-enforced
+send_email (see docs/adr/0003), and run_email_summary (fetch + LLM-classify + label junk).
+Other skills import get_gmail_service from here rather than re-authenticating.
+"""
 import os
 import base64
 from email.message import EmailMessage
@@ -12,8 +18,6 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import PromptTemplate
 import json
 # Security: Restricted scopes. 
@@ -25,18 +29,36 @@ SCOPES = [
 ]
 # Cache for the allowlist so we don't query GCS every time
 _cached_allowlist = None
+def _load_local_allowlist():
+    """Read allow.json next to the project root. Returns None if missing/unreadable."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "allow.json")
+    try:
+        with open(path) as f:
+            return json.load(f).get("allowed_emails", [])
+    except Exception:
+        return None
+
+
 def get_allowed_recipients():
-    """Fetches the allowlist from a secure Google Cloud Storage bucket."""
+    """Fetches the send allowlist: GCS bucket if configured, else local allow.json.
+
+    On GCS failure, falls back to the local allow.json (laptop hosting — see ADR 0005);
+    if that's also unavailable, fail-safes to an empty list so nothing sends.
+    """
     global _cached_allowlist
     if _cached_allowlist is not None:
         return _cached_allowlist
-    
+
     bucket_name = os.getenv("ALLOWLIST_BUCKET_NAME")
     if not bucket_name:
-        print("⚠️ ALLOWLIST_BUCKET_NAME not set in .env! Defaulting to strict hardcoded allowlist.")
-        _cached_allowlist = ["satviksethia@gmail.com"]
-        return _cached_allowlist
-        
+        local = _load_local_allowlist()
+        if local is not None:
+            print("🔒 Using local allow.json send allowlist.")
+            _cached_allowlist = local
+            return _cached_allowlist
+        print("⚠️ No ALLOWLIST_BUCKET_NAME and no allow.json — failing safe to empty allowlist.")
+        return []
+
     try:
         import google.auth
         credentials, project_id = google.auth.default()
@@ -55,6 +77,11 @@ def get_allowed_recipients():
         return _cached_allowlist
     except Exception as e:
         print(f"❌ Failed to fetch allowlist from GCS: {e}")
+        local = _load_local_allowlist()
+        if local is not None:
+            print("🔒 Falling back to local allow.json send allowlist (ADR 0005).")
+            _cached_allowlist = local
+            return _cached_allowlist
         # Fail safe to an empty list so no emails can be sent if security checks fail
         return []
 def get_gmail_service():
@@ -183,22 +210,16 @@ def run_email_summary():
         
     emails = fetch_recent_emails(service)
     if not emails:
-        return []
-    # Get the LLM with fallbacks
-    print("Initializing LLM Router (Opus -> Sonnet -> Gemini)...")
+        return [], []
+    # Get the LLM from our unified router
+    print("Initializing LLM Router...")
+    from llm_router import get_llm
     try:
-        # Primary: Claude 3 Opus
-        llm_opus = ChatAnthropic(model="claude-3-opus-20240229", temperature=0)
-        # Fallback 1: Claude 3.5 Sonnet
-        llm_sonnet = ChatAnthropic(model="claude-3-5-sonnet-20241022", temperature=0)
-        # Fallback 2: Gemini 2.5 Flash
-        llm_gemini = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-        
-        # Link them together
-        llm = llm_opus.with_fallbacks([llm_sonnet, llm_gemini])
+        llm = get_llm(temperature=0)
     except Exception as e:
         print(f"Failed to intialize LLM. Error: {e}")
         return [], []
+        
     # Load User Profile (Memory Layer 1)
     profile_data = load_profile()
     profile_text = json.dumps(profile_data, indent=2) if profile_data else "No specific personal context available."

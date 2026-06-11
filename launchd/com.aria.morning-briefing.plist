@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Aria's morning briefing at 08:00 daily (compaction + briefing via morning_run.py).
+         Unlike cron, launchd fires a missed schedule once on wake if the laptop was
+         asleep at 08:00 — the briefing arrives when you open the lid.
+         Invokes the venv python directly (NOT run.sh): macOS TCC denies /bin/bash
+         access to ~/Documents in launchd context, while this Python binary holds
+         the grant. -->
+    <key>Label</key>
+    <string>com.aria.morning-briefing</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/satviksethia/Documents/personal-assistant/venv/bin/python3</string>
+        <string>-u</string>
+        <string>morning_run.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/satviksethia/Documents/personal-assistant</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/satviksethia/Documents/personal-assistant/logs/morning_briefing.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/satviksethia/Documents/personal-assistant/logs/morning_briefing.err.log</string>
+</dict>
+</plist>

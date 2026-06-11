@@ -1,11 +1,15 @@
+"""News skill — daily newsletter briefing.
+
+Fetches the last day of Morning Brew / NYT / CNN newsletters, scrapes their full
+bodies, and uses the LLM router to aggregate them into deduped topics (flagging
+Morning Brew exclusives). Entry point: generate_news_brief().
+"""
 import os
 import sys
 import base64
 import json
 from bs4 import BeautifulSoup
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import PromptTemplate
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -112,16 +116,9 @@ def generate_news_brief():
         return None
         
     print("Synthesizing news with AI Router (Opus -> Sonnet -> Gemini)... (This may take a moment)")
+    from llm_router import get_llm
     try:
-        # Primary: Claude 3 Opus
-        llm_opus = ChatAnthropic(model="claude-3-opus-20240229", temperature=0)
-        # Fallback 1: Claude 3.5 Sonnet
-        llm_sonnet = ChatAnthropic(model="claude-3-5-sonnet-20241022", temperature=0)
-        # Fallback 2: Gemini 2.5 Flash
-        llm_gemini = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
-        
-        # Link them together
-        llm = llm_opus.with_fallbacks([llm_sonnet, llm_gemini])
+        llm = get_llm(temperature=0)
     except Exception as e:
         print(f"Failed to intialize LLM. Error: {e}")
         return None

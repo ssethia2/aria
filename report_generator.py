@@ -1,10 +1,15 @@
+"""Renders the daily Markdown briefing consumed by main.py.
+
+Takes email classifications, raw emails, the news brief, and today's reminders;
+writes reports/daily_summary_<date>.md and returns (path, markdown_string).
+"""
 import os
 from datetime import datetime
 
 REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
 
-def generate_daily_markdown(classifications, emails_data, news_briefing=None):
-    """Takes LLM classifications and raw email data to build a markdown report."""
+def generate_daily_markdown(classifications, emails_data, news_briefing=None, reminders=None):
+    """Takes LLM classifications, raw email data, news, and reminders to build a central markdown report."""
     if not os.path.exists(REPORT_DIR):
         os.makedirs(REPORT_DIR)
         
@@ -29,6 +34,12 @@ def generate_daily_markdown(classifications, emails_data, news_briefing=None):
     with open(report_path, "w") as f:
         f.write(f"# Daily Assistant Summary - {date_str}\n\n")
         
+        if reminders:
+            f.write("## 📌 Commitments & Agenda\n")
+            for r in reminders:
+                f.write(f"- [ ] {r['task']}\n")
+            f.write("\n")
+            
         if news_briefing:
             f.write("## 🌍 Your Daily News Briefing\n")
             for topic in news_briefing:

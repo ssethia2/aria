@@ -1,3 +1,9 @@
+"""Standalone bulk inbox cleaner (manual, one-shot).
+
+Pages through the entire INBOX in batches and labels junk "To Be Deleted" for
+manual review — it never permanently deletes. Pins Gemini Flash directly (not the
+router) for cost on large batches. Run: `python3 clean_inbox.py`.
+"""
 import os
 import sys
 import json
