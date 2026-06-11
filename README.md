@@ -71,7 +71,27 @@ A single `get_llm()` returns a LangChain chat model with a built-in fallback cha
 
 ---
 
-## Setup
+## Quick start (self-host)
+
+Aria runs on your own machine with your own keys — nothing leaves your host. Minimal path:
+
+```bash
+git clone <this repo> && cd personal-assistant
+bash setup.sh                 # venv, deps, .env scaffold, browser engine, health check
+# edit .env: set TELEGRAM_BOT_TOKEN, ANTHROPIC_API_KEY (chat id comes on first run)
+venv/bin/python3 telegram_bot.py
+```
+
+Message your new bot — in "setup mode" it replies with your chat id; paste that into `.env` as `TELEGRAM_ALLOWED_CHAT_ID` and restart. That's a working assistant (chat, memory, commitments, weather, research, notes, groceries). Layer in the rest when you want it:
+
+- **Gmail + Calendar** → drop a Google OAuth `credentials.json` in the folder, run `python3 auth_google.py`
+- **Semantic memory + LLM fallback** → add `GEMINI_API_KEY`
+- **Smart home** → run Home Assistant, set `HA_URL` / `HA_TOKEN`
+- **24/7** → host it on a Pi or Linux box (see [docs/pi-migration.md](docs/pi-migration.md))
+
+Run `venv/bin/python3 healthcheck.py` anytime to see exactly what's configured and what's missing. The only hard requirements are the Telegram token, your chat id, and the Anthropic key — every other feature degrades off cleanly until configured.
+
+## Setup (detailed)
 
 ### Prerequisites
 - Python 3.10+

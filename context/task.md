@@ -83,7 +83,8 @@
 - [ ] Reliability / "others can use it" Phase (started 2026-06)
   - [X] healthcheck.py self-diagnosis: doctor CLI + get_system_status tool + startup check + HealthMonitor watchdog
   - [ ] External dead-man's-switch (healthchecks.io ping) — catches whole-host-down; wire on the Pi
-  - [ ] Self-host onboarding: one-command setup + config validation + first-run wizard
+  - [X] Self-host onboarding: setup.sh (one command), .env.example, USER_EMAIL allowlist fallback, README quick-start, doctor as config validator
+  - [ ] First-run interactive wizard (prompt for the 3 required values) — nice-to-have
   - [ ] Decide distribution model: self-hostable (recommended) vs multi-tenant
 - [ ] Human Touch Phase (see implementation_plan Phase 8)
   - [X] Relational curiosity in system prompt: ask unnamed people's names once, check memory before asking, one follow-up question for missing details

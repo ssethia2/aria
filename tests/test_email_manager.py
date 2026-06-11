@@ -115,6 +115,16 @@ class TestAllowlistFailSafe(unittest.TestCase):
             result = email_manager.get_allowed_recipients()
         self.assertEqual(result, ['me@example.com'])
 
+    def test_user_email_is_allowlist_fallback_without_allow_json(self):
+        """Self-host convenience: USER_EMAIL stands in for allow.json."""
+        import os
+        allow_path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(email_manager.__file__))), 'allow.json')
+        with patch.dict('os.environ', {'USER_EMAIL': 'satvik@example.com'}), \
+             patch('builtins.open', side_effect=FileNotFoundError):
+            result = email_manager._load_local_allowlist()
+        self.assertEqual(result, ['satvik@example.com'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -34,13 +34,16 @@ SCOPES = [
 # Cache for the allowlist so we don't query GCS every time
 _cached_allowlist = None
 def _load_local_allowlist():
-    """Read allow.json next to the project root. Returns None if missing/unreadable."""
+    """The send allowlist for self-hosters: allow.json if present, else [USER_EMAIL]
+    from .env (so a separate file isn't required). Returns None if neither exists."""
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "allow.json")
     try:
         with open(path) as f:
             return json.load(f).get("allowed_emails", [])
     except Exception:
-        return None
+        pass
+    user_email = os.getenv("USER_EMAIL")
+    return [user_email] if user_email else None
 
 
 def get_allowed_recipients():
