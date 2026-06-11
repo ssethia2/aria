@@ -45,8 +45,15 @@ def main():
 
     classifications, raw_emails = run_email_summary()
     news_briefing = generate_news_brief()
-    # Commitments: due/overdue lead the agenda; the next week rides along for context.
-    reminders = [{'task': format_line(c)} for c in get_due_commitments()]
+    # Agenda: today's calendar first, then due/overdue commitments, then the week ahead.
+    reminders = []
+    try:
+        from skills.google_calendar import fetch_events
+        for line in (fetch_events(days=1) or []):
+            reminders.append({'task': f"🗓 {line}"})
+    except Exception as e:
+        print(f"Calendar fetch for briefing failed: {e}")
+    reminders += [{'task': format_line(c)} for c in get_due_commitments()]
     reminders += [{'task': f"(upcoming) {format_line(c)}"} for c in get_upcoming_commitments()]
 
     if not (classifications or news_briefing or reminders):

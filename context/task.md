@@ -77,6 +77,8 @@
 - [X] Voice v1 (2026-06): Telegram voice notes — transcribed via Gemini (llm_router.transcribe_audio), handled as text
 - [ ] Voice v2: wake-word room device on the Raspberry Pi (after Pi migration)
 - [ ] Pi migration: systemd units + setup script + state transfer (planned for the weekend)
+- [X] Connectors: Google Calendar (2026-06) — dual-write standing rule (personal + shared-yellow) enforced in create_calendar_event; chat-driven setup; calendar scopes via ADR 0006; events in briefing
+- [ ] Connector backlog: Apple Notes (AppleScript), others as needed
 - [ ] Human Touch Phase (see implementation_plan Phase 8)
   - [X] Relational curiosity in system prompt: ask unnamed people's names once, check memory before asking, one follow-up question for missing details
   - [ ] People model: first-class person entities linked to commitments + memory

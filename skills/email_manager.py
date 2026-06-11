@@ -20,12 +20,16 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from langchain_core.prompts import PromptTemplate
 import json
-# Security: Restricted scopes. 
+# Security: Restricted scopes.
 # gmail.modify allows reading, labeling, and moving, but NOT permanent deletion.
 # gmail.send restricts sending securely.
+# calendar.events + calendar.readonly (ADR 0006): event CRUD and calendar listing,
+# but NOT calendar sharing/ACL changes or calendar deletion.
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify',
-    'https://www.googleapis.com/auth/gmail.send'
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/calendar.readonly',
 ]
 # Cache for the allowlist so we don't query GCS every time
 _cached_allowlist = None

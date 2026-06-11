@@ -16,6 +16,7 @@ For the *why* behind the architecture and the phased roadmap, see [`context/impl
 | Bulk inbox cleanup across the whole inbox | `clean_inbox.py` | manual |
 | Daily news brief — aggregate Morning Brew / NYT / CNN newsletters into deduped topics | `skills/news_manager.py` | morning job + chat |
 | Commitment keeping — capture promises/deadlines/birthdays/replies-owed from chat, timed pings, nothing slips | `skills/commitment_manager.py` | chat + engine + briefing |
+| Google Calendar — events auto-created on BOTH personal + shared calendars (yellow on shared); schedule queries; events in the briefing | `skills/google_calendar.py` | chat + briefing |
 | Netflix Household update via headless browser | `skills/netflix_manager.py` | chat + webhook |
 | Long-term semantic memory + recall | `memory.py` | every chat turn |
 | Proactive monitoring — due-reminder pings, important-email alerts, autonomous Netflix handling | `engine.py` | background thread in the bot |

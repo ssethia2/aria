@@ -31,6 +31,8 @@ from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
                                        complete_commitment, drop_commitment)
+from skills.google_calendar import (create_calendar_event, get_calendar_events,
+                                    list_my_calendars, configure_shared_calendar)
 
 CHECKPOINT_DB_PATH = os.path.join(os.path.dirname(__file__), "aria_checkpoints.db")
 
@@ -66,6 +68,10 @@ def build_tools():
         list_commitments,
         complete_commitment,
         drop_commitment,
+        create_calendar_event,
+        get_calendar_events,
+        list_my_calendars,
+        configure_shared_calendar,
     ]
 
 
@@ -91,6 +97,13 @@ Use `list_commitments` when they ask what they owe or what's pending; `complete_
 when they say something's done; `drop_commitment` when they no longer intend to do it.
 Use kind='people_date' with recurring_yearly=True for birthdays and anniversaries, and
 due_time ONLY when they name a specific time of day.
+
+CALENDAR: for appointments and events with a date (dinners, flights, meetings), use
+`create_calendar_event` — it automatically follows the user's standing rule: the event
+lands on BOTH his personal calendar and the one shared with his girlfriend (yellow).
+Don't ask which calendar; the tool handles it. Events = calendar; promises/tasks =
+commitments; something can be both. Use `get_calendar_events` when asked about the
+schedule.
 
 User Core Profile (Static):
 {profile_data}
