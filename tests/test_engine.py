@@ -275,6 +275,25 @@ class TestChaseMonitor(TempStateMixin, unittest.TestCase):
         llm.invoke.assert_not_called()
 
 
+class TestHealthMonitor(TempStateMixin, unittest.TestCase):
+    def test_alerts_on_fail_then_dedups(self):
+        results = [('gmail', 'FAIL', 'token expired'), ('disk', 'OK', 'fine')]
+        mon = engine.HealthMonitor()
+        with patch('healthcheck.run_all', return_value=results):
+            first = mon.check({})
+            state = {}
+            a = mon.check(state)
+            b = mon.check(state)
+        self.assertEqual(len(first), 1)
+        self.assertIn("attention", first[0].text.lower())
+        self.assertEqual(len(a), 1)
+        self.assertEqual(b, [])          # same failure same day → silent
+
+    def test_silent_when_all_ok(self):
+        with patch('healthcheck.run_all', return_value=[('x', 'OK', 'fine')]):
+            self.assertEqual(engine.HealthMonitor().check({}), [])
+
+
 class TestNetflixMonitor(TempStateMixin, unittest.TestCase):
     def _service_returning(self, msg_id):
         service = MagicMock()

@@ -180,6 +180,18 @@ def main():
 
         start_engine_thread(notify_fn=engine_notify)
 
+    # Startup self-check: log status, and telegram the user if anything is broken
+    # on boot (a restart into a broken state should be loud, not silent).
+    try:
+        from healthcheck import run_all, summary, worst, FAIL
+        results = run_all()
+        print(summary(results))
+        if worst(results) == FAIL and allowed:
+            from notify import send_telegram
+            send_telegram("⚠️ I just (re)started and something's wrong:\n\n" + summary(results))
+    except Exception as e:
+        print(f"[startup] health check failed to run: {e}")
+
     offset = None
     print("🎙️  Aria is live on Telegram. Press Ctrl+C to stop.")
 

@@ -121,6 +121,14 @@ The lowest-friction way to reach Aria, and zero hosting cost — long-polling me
 2. Run `python3 telegram_bot.py` and message your bot. While no allowlist is set it runs in **setup mode** and replies with your chat id.
 3. Put that id in `.env` as `TELEGRAM_ALLOWED_CHAT_ID` (comma-separate for multiple) and restart. Only allowlisted chats are served thereafter — **required**, since anyone who finds the bot can message it and Aria can read your email.
 
+### Reliability & self-diagnosis
+Silent failure is the enemy (a misconfigured cron once failed the briefing for days unnoticed). Three layers now guard against it:
+- **`healthcheck.py`** — `python3 healthcheck.py` runs the "doctor": validates secrets, Gmail token, memory, databases, engine freshness, whether today's briefing ran, and disk. Exits non-zero on failure (scriptable). Also exposed to chat as the `get_system_status` tool ("are you healthy?").
+- **Startup check** — the bot self-checks on boot and Telegrams you if it restarted into a broken state.
+- **HealthMonitor** — the engine re-runs the diagnosis every few hours and alerts you when something turns FAIL (deduped to once/day), so breakage becomes a message, not weeks of silence.
+
+**Known limit — the dead-man's-switch gap:** these run *inside* Aria, so they can't detect "the whole host is down." For that, point the bot at an external monitor (e.g. a free healthchecks.io URL it pings on a heartbeat; the external service emails you if pings stop). Recommended once Aria lives on the Pi.
+
 ### Proactivity engine
 While the bot runs, `engine.py` polls in a background thread and Aria reaches out unprompted:
 - **Commitments** (every 2 min) — time-specific commitments ping at their moment; date-only ones surface in the briefing/digest instead of buzzing randomly

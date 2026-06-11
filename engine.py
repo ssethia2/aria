@@ -336,6 +336,33 @@ Return ONLY raw JSON (no markdown):
         return [Notification(verdict["message"])]
 
 
+class HealthMonitor(Monitor):
+    """Proactive watchdog: runs the self-diagnosis every few hours and alerts the
+    user when something turns FAIL — so a silent breakage (dead token, stalled
+    engine, missed briefing) becomes a message instead of weeks of nothing.
+    Dedups: one alert per distinct failure-set per day.
+    """
+
+    def __init__(self, interval_seconds=10800):
+        super().__init__(name="health", interval_seconds=interval_seconds)
+
+    def check(self, state: dict) -> list:
+        from healthcheck import run_all, summary, FAIL
+
+        results = run_all()
+        fails = sorted(name for name, s, _ in results if s == FAIL)
+        today = datetime.now().strftime('%Y-%m-%d')
+        if not fails:
+            state.pop('alerted_sig', None)
+            return []
+        sig = ";".join(fails)
+        if state.get('alerted_sig') == sig and state.get('alerted_date') == today:
+            return []  # already flagged this exact problem today
+        state['alerted_sig'] = sig
+        state['alerted_date'] = today
+        return [Notification("🩺 Something needs attention:\n\n" + summary(results))]
+
+
 class NetflixMonitor(Monitor):
     """Acts the moment a household-update email lands; the *report* can wait.
 
@@ -441,7 +468,8 @@ class ProactiveEngine:
 
 def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
     return ProactiveEngine(
-        monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(), NetflixMonitor()],
+        monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(),
+                  NetflixMonitor(), HealthMonitor()],
         notify_fn=notify_fn,
     )
 

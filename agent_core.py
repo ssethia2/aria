@@ -36,6 +36,15 @@ from skills.grocery_manager import (add_to_grocery_list, view_grocery_list,
 from skills.package_manager import check_packages
 from skills.browser_manager import browse_and_report
 from skills.home_assistant import list_lights, control_light
+from healthcheck import run_all as _health_run_all, summary as _health_summary
+from langchain_core.tools import tool as _tool
+
+
+@_tool
+def get_system_status() -> str:
+    """Report Aria's own health — config, credentials, engine, briefing, disk.
+    Use when the user asks if everything's working / if she's healthy / what's wrong."""
+    return _health_summary(_health_run_all())
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
@@ -106,6 +115,7 @@ def build_tools():
         browse_and_report,
         list_lights,
         control_light,
+        get_system_status,
     ]
 
 

@@ -80,6 +80,11 @@
   - [ ] Post-migration: piper-tts for voice replies on the Pi (say is macOS-only)
 - [X] Connectors: Google Calendar (2026-06) — dual-write standing rule (personal + shared-yellow) enforced in create_calendar_event; chat-driven setup; calendar scopes via ADR 0006; events in briefing
 - [ ] Connector backlog: Apple Notes (AppleScript), others as needed
+- [ ] Reliability / "others can use it" Phase (started 2026-06)
+  - [X] healthcheck.py self-diagnosis: doctor CLI + get_system_status tool + startup check + HealthMonitor watchdog
+  - [ ] External dead-man's-switch (healthchecks.io ping) — catches whole-host-down; wire on the Pi
+  - [ ] Self-host onboarding: one-command setup + config validation + first-run wizard
+  - [ ] Decide distribution model: self-hostable (recommended) vs multi-tenant
 - [ ] Human Touch Phase (see implementation_plan Phase 8)
   - [X] Relational curiosity in system prompt: ask unnamed people's names once, check memory before asking, one follow-up question for missing details
   - [ ] People model: first-class person entities linked to commitments + memory
