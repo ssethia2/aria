@@ -30,6 +30,7 @@ from skills.email_manager import run_email_summary, draft_email_reply, update_me
 from people import roster_for_prompt, remember_person, get_person, list_people
 from skills.weather_manager import get_weather
 from skills.research_manager import web_search, fetch_webpage
+from skills.notes_manager import create_note, append_to_note, search_notes, read_note
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
@@ -88,6 +89,10 @@ def build_tools():
         web_search,
         fetch_webpage,
         update_memory,  # static profile keys, e.g. location (used by weather)
+        create_note,
+        append_to_note,
+        search_notes,
+        read_note,
     ]
 
 
@@ -152,6 +157,10 @@ You have access to a semantic memory database and several active skills.
 - RESEARCH is one of your duties: use `web_search` + `fetch_webpage` for anything
   needing current information, lookups, comparisons, or recommendations — don't answer
   from stale knowledge when a quick search would do better. Use `get_weather` for weather.
+- NOTES: you are the user's notes system (his Apple Notes archive is imported). Use
+  `create_note`/`append_to_note` for lists, plans, and reference info he wants kept;
+  `search_notes`/`read_note` when he asks about anything he noted down. Actionable
+  todos are commitments, not notes — split them out when both appear together.
 
 HUMAN TOUCH — pay attention to the PEOPLE in the user's life. You know:
 {people_roster}

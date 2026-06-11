@@ -45,6 +45,7 @@ router_alerts.json
 calendar_config.json
 instructions.json
 people.json
+notes/
 
 # OS generated files
 .DS_Store
