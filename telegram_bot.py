@@ -1,4 +1,5 @@
-"""Telegram chat interface (long-polling) — talk to Aria from your phone.
+"""Telegram chat interface (long-polling) — talk to Aria from your phone, by text
+or voice note (voice is transcribed via Gemini and handled like text).
 
 Zero infra: this long-polls the Telegram Bot API, so it needs no public endpoint,
 no open port, and no server. It runs anywhere — including your laptop — yet is
@@ -57,6 +58,16 @@ def show_typing(chat_id):
         pass
 
 
+def transcribe_voice_message(file_id: str) -> str:
+    """Download a Telegram voice note and transcribe it (Gemini via the router)."""
+    info = requests.get(f"{API}/getFile", params={"file_id": file_id}, timeout=15).json()
+    file_path = info["result"]["file_path"]
+    audio = requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{file_path}",
+                         timeout=60).content
+    from llm_router import transcribe_audio
+    return transcribe_audio(audio, mime_type="audio/ogg")
+
+
 def main():
     if not TOKEN:
         print("Missing TELEGRAM_BOT_TOKEN in .env. Create a bot with @BotFather first.")
@@ -112,11 +123,11 @@ def main():
         for update in updates:
             offset = update["update_id"] + 1
             message = update.get("message") or update.get("edited_message")
-            if not message or "text" not in message:
+            if not message or not ("text" in message or "voice" in message):
                 continue
 
             chat_id = str(message["chat"]["id"])
-            text = message["text"].strip()
+            text = (message.get("text") or "").strip()
 
             # Setup mode: help the user discover their chat id from the phone.
             if not allowed:
@@ -129,6 +140,28 @@ def main():
             # Normal mode: silently ignore anyone not on the allowlist.
             if chat_id not in allowed:
                 print(f"⛔ Ignored unauthorized chat_id={chat_id}: {text[:60]!r}")
+                continue
+
+            # Voice notes: transcribe AFTER the allowlist gate, then treat as text.
+            if not text and "voice" in message:
+                if message["voice"].get("duration", 0) > 300:
+                    send_message(chat_id, "That voice note is over 5 minutes — could you "
+                                          "send a shorter one (or type it)?")
+                    continue
+                show_typing(chat_id)
+                try:
+                    text = transcribe_voice_message(message["voice"]["file_id"])
+                except Exception as e:
+                    print(f"[voice] transcription failed: {e}")
+                    send_message(chat_id, "Sorry, I couldn't make out that voice note — "
+                                          "mind trying again or typing it?")
+                    continue
+                if not text:
+                    send_message(chat_id, "I couldn't hear anything in that voice note.")
+                    continue
+                send_message(chat_id, f"🎙️ Heard: “{text}”")
+
+            if not text:
                 continue
 
             if text.lower() in ("/start", "/help"):

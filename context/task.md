@@ -74,6 +74,9 @@
   - [X] Chase loop: ChaseMonitor — daytime LLM judgment over open commitments, max one warm nudge/day
   - [ ] On-demand email reply drafting (Gmail drafts API — sends nothing)
   - [ ] Phase 2 integrations: Google Calendar read, Apple Notes (AppleScript)
+- [X] Voice v1 (2026-06): Telegram voice notes — transcribed via Gemini (llm_router.transcribe_audio), handled as text
+- [ ] Voice v2: wake-word room device on the Raspberry Pi (after Pi migration)
+- [ ] Pi migration: systemd units + setup script + state transfer (planned for the weekend)
 - [ ] Human Touch Phase (see implementation_plan Phase 8)
   - [X] Relational curiosity in system prompt: ask unnamed people's names once, check memory before asking, one follow-up question for missing details
   - [ ] People model: first-class person entities linked to commitments + memory

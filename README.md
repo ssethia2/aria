@@ -54,7 +54,7 @@ For the *why* behind the architecture and the phased roadmap, see [`context/impl
 
 All three share one agent definition in `agent_core.py` (tools + system prompt), so they stay thin and consistent. Conversations are checkpointed to SQLite (`aria_checkpoints.db`) via LangGraph, so chat history survives restarts — each Telegram chat and the local REPL get their own persistent thread.
 
-- **`telegram_bot.py`** — **chat from your phone**. Long-polls the Telegram Bot API (no public endpoint, port, or server needed) and runs the agent. Reachable anywhere; runs even from your laptop. See [Chat with Aria on Telegram](#chat-with-aria-on-telegram).
+- **`telegram_bot.py`** — **chat from your phone, by text or voice note**. Long-polls the Telegram Bot API (no public endpoint, port, or server needed) and runs the agent; voice notes are transcribed via Gemini (she echoes "🎙️ Heard: …" then acts). See [Chat with Aria on Telegram](#chat-with-aria-on-telegram).
 - **`interact.py`** — the **local REPL**. Same agent, in your terminal. Run `python3 interact.py`.
 - **`main.py`** — the **batch morning job**. Runs the email summary, news brief, and today's reminders, builds a Markdown report, and delivers it — Aria messages you on Telegram (primary) and emails a copy. Fails loud: errors trigger a Telegram alert instead of a silent miss. Scheduled via `run.sh` (cron or the provided launchd agent).
 

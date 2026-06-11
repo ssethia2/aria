@@ -87,6 +87,28 @@ def _build_chain(specs):
     return anchor.with_fallbacks(fallbacks) if fallbacks else anchor
 
 
+def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+    """Transcribe a voice recording via Gemini (the configured multimodal provider).
+
+    Lives here so provider-SDK access stays centralized (ADR 0001's spirit) even
+    though transcription isn't a chat-model call.
+    """
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                "You are a speech-to-text engine. Output the verbatim transcript of "
+                "the audio and NOTHING else — no preamble, no commentary, no quotes, "
+                "no repetition. If the audio contains no speech, output nothing."),
+            temperature=0),
+        contents=[types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)])
+    return (response.text or "").strip()
+
+
 def get_llm(temperature=0, tier="standard"):
     """
     Returns a unified LangChain ChatModel with built-in fallbacks.
