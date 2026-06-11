@@ -35,6 +35,7 @@ from skills.grocery_manager import (add_to_grocery_list, view_grocery_list,
                                     remove_from_grocery_list, clear_grocery_list)
 from skills.package_manager import check_packages
 from skills.browser_manager import browse_and_report
+from skills.home_assistant import list_lights, control_light
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
@@ -103,6 +104,8 @@ def build_tools():
         clear_grocery_list,
         check_packages,
         browse_and_report,
+        list_lights,
+        control_light,
     ]
 
 
@@ -184,6 +187,8 @@ You have access to a semantic memory database and several active skills.
   and any facts he's given (last name, confirmation #). It EXPLORES and hands off —
   it never pays, orders, or enters passwords, and stops at that boundary with a link.
   Relay what it found and the link; confirm with him before any step that commits money.
+- SMART HOME: `control_light` (on/off, brightness, color) and `list_lights` operate his
+  Matter lights via Home Assistant. "turn off the lights" → control_light("all", "off").
 
 HUMAN TOUCH — pay attention to the PEOPLE in the user's life. You know:
 {people_roster}
