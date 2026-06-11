@@ -119,7 +119,11 @@ def get_gmail_service():
         print(f'An error occurred initializing Gmail: {error}')
         return None
 def fetch_recent_emails(service, max_results=10):
-    """Fetch the latest emails from INBOX."""
+    """Fetch the latest emails from INBOX (via IMAP if app-password mode, else Gmail API)."""
+    import email_backend
+    if email_backend.using_app_password():
+        print(f"Fetching last {max_results} emails via IMAP...")
+        return email_backend.imap_fetch_recent(max_results)
     print(f"Fetching last {max_results} emails from INBOX...")
     try:
         results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=max_results).execute()
@@ -190,7 +194,18 @@ def send_email(service, to_email, subject, body_text):
     if to_email not in allowed_recipients:
         print(f"❌ SECURITY BLOCK: Cannot send email to {to_email}. Not in GCS allowlist.")
         return None
-        
+
+    import email_backend
+    if email_backend.using_app_password():
+        print(f"Sending email to {to_email} via SMTP...")
+        try:
+            email_backend.smtp_send(to_email, subject, body_text)
+            print("✅ Email sent (SMTP).")
+            return {'id': 'smtp-sent'}
+        except Exception as e:
+            print(f"❌ SMTP send failed: {e}")
+            return None
+
     print(f"Sending email to {to_email}...")
     message = EmailMessage()
     message.set_content(body_text)
@@ -218,6 +233,21 @@ def draft_email_reply(search_query: str, body: str) -> str:
             (e.g. 'from:rohan trip plans', 'subject:"apartment listings"').
         body: The reply text, written in the user's voice — concise, no signature.
     """
+    import email_backend
+    if email_backend.using_app_password():
+        # IMAP mode: search the inbox loosely and draft against the best match.
+        matches = [e for e in email_backend.imap_fetch_recent(30)
+                   if any(t.lower() in (e['subject'] + e['sender']).lower()
+                          for t in search_query.split())]
+        if not matches:
+            return f"Couldn't find an email matching {search_query!r}."
+        m = matches[0]
+        subj = m['subject'] if m['subject'].lower().startswith('re:') else f"Re: {m['subject']}"
+        ok = email_backend.imap_create_draft(m['sender'], subj, body,
+                                             in_reply_to=m.get('message_id'))
+        return (f"Draft reply to {m['sender']} saved to your Drafts folder for review."
+                if ok else "Couldn't save the draft to your Drafts folder.")
+
     service = get_gmail_service()
     if not service:
         return "Gmail isn't available right now."
@@ -252,13 +282,15 @@ def draft_email_reply(search_query: str, body: str) -> str:
 
 
 def run_email_summary():
-    """Fetches and processes recent emails from the Gmail API."""
+    """Fetches and triages recent emails (Gmail API, or IMAP in app-password mode)."""
     print("Running Pilot Skill: Email Summary...")
+    import email_backend
+    app_pw = email_backend.using_app_password()
     service = get_gmail_service()
-    if not service:
+    if not service and not app_pw:
         print("Failed to start Gmail service. Check credentials.json.")
         return None, None
-        
+
     emails = fetch_recent_emails(service)
     if not emails:
         return [], []
@@ -308,18 +340,21 @@ def run_email_summary():
         # Clean potential markdown from output
         cleaned_response = response.content.strip().strip('```json').strip('```')
         classifications = json.loads(cleaned_response)
-        
-        label_id = get_or_create_label(service, "To Be Deleted")
-        
+
+        # Auto-labelling needs the Gmail API; in IMAP/app-password mode we triage
+        # and report but don't move messages (no label step).
+        label_id = get_or_create_label(service, "To Be Deleted") if service else None
+
         print("\n--- Daily Email Summary ---\n")
-        
+
         for item in classifications:
             email_info = next((e for e in emails if e['id'] == item['id']), None)
             if not email_info: continue
-                
+
             if item['action'] == 'DELETE':
                 print(f"[TRASHING] {email_info['subject']}")
-                apply_label_to_email(service, item['id'], label_id)
+                if label_id:
+                    apply_label_to_email(service, item['id'], label_id)
             else:
                 print(f"[{item['category']}] {email_info['sender']}")
                 print(f"Subject: {email_info['subject']}")

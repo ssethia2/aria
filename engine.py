@@ -182,38 +182,40 @@ Return [] if nothing qualifies — that should be the common case."""
         return self._maybe_flush_digest(state)
 
     def _screen_new_mail(self, state: dict):
+        import email_backend
         from skills.email_manager import get_gmail_service
-
-        service = get_gmail_service()
-        if not service:
-            print("[engine] email-digest: no Gmail service, skipping tick")
-            return
 
         now_ts = time.time()
         last_ts = state.get("last_check_ts", now_ts - self.interval_seconds)
-        # 2-minute overlap so boundary emails aren't missed; dedupe handles repeats.
-        query = f"in:inbox after:{int(last_ts - 120)}"
-        resp = service.users().messages().list(
-            userId='me', q=query, maxResults=20).execute()
-        ids = [m['id'] for m in resp.get('messages', [])]
-
         seen = state.get("seen_ids", [])
-        new_ids = [i for i in ids if i not in seen]
-        state["last_check_ts"] = now_ts
-        state["seen_ids"] = (seen + new_ids)[-300:]
-        if not new_ids:
-            return
 
-        emails = []
-        for msg_id in new_ids:
-            msg = service.users().messages().get(userId='me', id=msg_id).execute()
-            headers = msg['payload'].get('headers', [])
-            emails.append({
-                'id': msg_id,
-                'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject'),
-                'sender': next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown'),
-                'snippet': msg.get('snippet', ''),
-            })
+        if email_backend.using_app_password():
+            fetched = email_backend.imap_fetch_since(last_ts - 120)
+        else:
+            service = get_gmail_service()
+            if not service:
+                print("[engine] email-digest: no Gmail service, skipping tick")
+                return
+            query = f"in:inbox after:{int(last_ts - 120)}"  # 2-min overlap; dedupe handles repeats
+            resp = service.users().messages().list(
+                userId='me', q=query, maxResults=20).execute()
+            fetched = []
+            for m in resp.get('messages', []):
+                msg = service.users().messages().get(userId='me', id=m['id']).execute()
+                headers = msg['payload'].get('headers', [])
+                fetched.append({
+                    'id': m['id'],
+                    'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject'),
+                    'sender': next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown'),
+                    'snippet': msg.get('snippet', ''),
+                })
+
+        new = [e for e in fetched if e['id'] not in seen]
+        state["last_check_ts"] = now_ts
+        state["seen_ids"] = (seen + [e['id'] for e in new])[-300:]
+        if not new:
+            return
+        emails = new
 
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
         response = _get_llm().invoke(

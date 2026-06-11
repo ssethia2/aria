@@ -51,16 +51,19 @@ def check_secrets():
     return OK, "core secrets present"
 
 
-def check_gmail():
-    token = _p('token.json')
-    if not os.path.exists(token):
-        return FAIL, "token.json missing — run auth_google.py"
+def check_email():
+    import email_backend
+    if email_backend.using_app_password():
+        ok, detail = email_backend.check_login()
+        return (OK if ok else FAIL), detail
+    if not os.path.exists(_p('token.json')):
+        return WARN, "no email configured (set EMAIL_APP_PASSWORD, or token.json via auth_google.py)"
     from skills.email_manager import get_gmail_service
     service = get_gmail_service()
     if not service:
         return FAIL, "Gmail service wouldn't build (token expired? re-auth)"
     service.users().getProfile(userId='me').execute()  # cheap live call
-    return OK, "Gmail reachable"
+    return OK, "Gmail reachable (API)"
 
 
 def check_memory():
@@ -117,7 +120,7 @@ def check_disk():
 
 _CHECKS = [
     ("secrets", check_secrets),
-    ("gmail", check_gmail),
+    ("email", check_email),
     ("memory", check_memory),
     ("databases", check_databases),
     ("engine", check_engine_freshness),
