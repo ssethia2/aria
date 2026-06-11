@@ -218,6 +218,26 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         self.assertEqual(add.call_args.kwargs['kind'], 'reply_owed')
         self.assertIn('Rohan', add.call_args.kwargs['who'])
 
+    def test_bulk_mail_skipped_before_llm(self):
+        """A List-Unsubscribe email must be dropped without an LLM call."""
+        service = MagicMock()
+        service.users.return_value.messages.return_value.list.return_value \
+            .execute.return_value = {'messages': [{'id': 'bulk1'}]}
+        service.users.return_value.messages.return_value.get.return_value \
+            .execute.return_value = {
+                'payload': {'headers': [
+                    {'name': 'Subject', 'value': 'Weekly Newsletter'},
+                    {'name': 'From', 'value': 'Brew <crew@morningbrew.com>'},
+                    {'name': 'List-Unsubscribe', 'value': '<https://unsub.example>'}]},
+                'snippet': 'todays news'}
+        mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 6, 12, 12, 0))
+        llm = MagicMock()
+        with patch('skills.email_manager.get_gmail_service', return_value=service), \
+             patch.object(engine, '_get_llm', return_value=llm), \
+             patch('email_backend.using_app_password', return_value=False):
+            mon.check({})
+        llm.invoke.assert_not_called()             # bulk mail never reached the LLM
+
     def test_evening_flush_sends_one_digest_then_stays_quiet(self):
         mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 6, 10, 18, 30))
         state = {"pending_digest": [

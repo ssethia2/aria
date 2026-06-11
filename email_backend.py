@@ -68,6 +68,7 @@ def _parse(raw_bytes) -> dict:
         'sender': msg.get('From', 'Unknown Sender'),
         'snippet': ' '.join(body.split())[:200],
         'message_id': msg.get('Message-ID', '').strip(),
+        'list_unsubscribe': msg.get('List-Unsubscribe', ''),  # bulk-mail marker
     }
 
 

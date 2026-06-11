@@ -212,6 +212,8 @@ Return [] if nothing qualifies — that should be the common case."""
                     'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject'),
                     'sender': next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown'),
                     'snippet': msg.get('snippet', ''),
+                    'list_unsubscribe': next(
+                        (h['value'] for h in headers if h['name'].lower() == 'list-unsubscribe'), ''),
                 })
 
         new = [e for e in fetched if e['id'] not in seen]
@@ -219,7 +221,15 @@ Return [] if nothing qualifies — that should be the common case."""
         state["seen_ids"] = (seen + [e['id'] for e in new])[-300:]
         if not new:
             return
-        emails = new
+
+        # Deterministic pre-filter: drop bulk mail before spending an LLM call on it.
+        from email_filter import is_bulk
+        emails = [e for e in new if not is_bulk(e)]
+        dropped = len(new) - len(emails)
+        if dropped:
+            print(f"[engine] email-digest: skipped {dropped} bulk email(s) before LLM screening")
+        if not emails:
+            return
 
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
         response = _get_llm().invoke(
