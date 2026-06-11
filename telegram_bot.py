@@ -25,9 +25,40 @@ import time
 
 import requests
 from dotenv import load_dotenv
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from agent_core import build_agent, open_checkpointer, thread_config, extract_text
+
+# Brief, non-spammy "what I'm doing" notes by tool family (user asked for light
+# progress updates during long tasks — not Claude-level detail).
+_ACTIONS = [
+    (('web_search', 'fetch_webpage', 'browse_and_report'), '🔍 Researching…'),
+    (('create_calendar_event', 'get_calendar_events', 'list_my_calendars',
+      'configure_shared_calendar'), '📅 Working with your calendar…'),
+    (('draft_email_reply', 'read_and_summarize_emails', 'generate_morning_news'),
+     '📧 Going through your email…'),
+    (('add_commitment', 'list_commitments', 'complete_commitment', 'drop_commitment'),
+     '✅ Updating your commitments…'),
+    (('add_to_grocery_list', 'view_grocery_list', 'remove_from_grocery_list',
+      'clear_grocery_list'), '🛒 On your grocery list…'),
+    (('create_note', 'append_to_note', 'search_notes', 'read_note'), '📝 In your notes…'),
+    (('get_weather',), '🌤 Checking the weather…'),
+    (('check_packages',), '📦 Checking your packages…'),
+    (('update_netflix_household',), '📺 Handling Netflix…'),
+    (('list_lights', 'control_light'), '💡 Adjusting the lights…'),
+    (('remember_person', 'get_person', 'list_people', 'add_memory', 'search_memory',
+      'read_cold_storage', 'update_memory'), '🧠 Checking what I know…'),
+    (('get_system_status',), '🩺 Running a self-check…'),
+    (('add_standing_instruction', 'update_standing_instruction',
+      'remove_standing_instruction'), '📌 Saving that as a standing rule…'),
+]
+
+
+def _friendly_action(tool_name: str) -> str:
+    for names, note in _ACTIONS:
+        if tool_name in names:
+            return note
+    return '⚙️ Working on it…'
 
 load_dotenv()
 
@@ -129,6 +160,35 @@ def send_voice_note(chat_id, ogg_path, caption=None):
     except Exception as e:
         print(f"[tts] sendVoice failed: {e}")
         return False
+
+
+def run_agent_streaming(agent, chat_id, text) -> str:
+    """Run the agent, sending a brief progress note as each new tool family is used,
+    and return the final reply. Streaming the LangGraph steps means the user sees
+    'Researching… / Working with your calendar…' instead of long radio silence."""
+    cfg = thread_config(f"telegram-{chat_id}")
+    last_note = None
+    reply = None
+    for chunk in agent.stream({"messages": [HumanMessage(content=text)]},
+                              config=cfg, stream_mode="updates"):
+        for _node, update in (chunk or {}).items():
+            if not isinstance(update, dict):
+                continue
+            for m in update.get("messages", []) or []:
+                tool_calls = getattr(m, "tool_calls", None) or []
+                if tool_calls:
+                    note = _friendly_action(tool_calls[0].get("name", ""))
+                    if note != last_note:          # coalesce consecutive same-family steps
+                        send_message(chat_id, note)
+                        last_note = note
+                elif isinstance(m, AIMessage):
+                    txt = extract_text(m.content)
+                    if txt and txt.strip():
+                        reply = txt                 # last text-only AI message = the answer
+    if reply is None:
+        state = agent.get_state(cfg)
+        reply = extract_text(state.values["messages"][-1].content)
+    return reply
 
 
 def transcribe_voice_message(file_id: str) -> str:
@@ -257,12 +317,9 @@ def main():
                 continue
 
             try:
-                # Pulse keeps "typing…" alive for the whole agent run — no radio silence.
+                # Pulse keeps "typing…" alive; streaming sends brief progress notes.
                 with TypingPulse(chat_id):
-                    # The checkpointer holds the conversation; only the new message is sent.
-                    result = agent.invoke({"messages": [HumanMessage(content=text)]},
-                                          config=thread_config(f"telegram-{chat_id}"))
-                    reply = extract_text(result["messages"][-1].content)
+                    reply = run_agent_streaming(agent, chat_id, text)
             except Exception as e:
                 reply = f"Sorry, something went wrong: {e}"
                 print(f"[agent error] {e}")
