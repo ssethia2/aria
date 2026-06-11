@@ -164,10 +164,16 @@ def browse_and_report(task: str, start_url: str, facts: str = None,
     up; you never pay, place orders, or enter passwords — you stop at that boundary
     and hand the user the link.
 
+    For availability/booking searches (lodging, flights, tickets), the dates and party
+    size MUST constrain the search before you read results — prefer a start_url that
+    already encodes them (e.g. Airbnb checkin/checkout/adults params) so the listings
+    shown are actually bookable. Only report options confirmed available for the dates.
+
     Args:
-        task: What to accomplish and what to report (e.g. "find my meal choices and
-            get to the order page, list the options for me").
-        start_url: The URL to begin at (e.g. the link from an email).
+        task: What to accomplish and what to report (e.g. "find available 2-bed rentals
+            for Jun 19-22, 4 guests, under $500, and list the bookable ones").
+        start_url: The URL to begin at — for a booking search, build it with the dates
+            and guest count already in the query string.
         facts: Any data you may enter on the user's behalf — last name, confirmation
             number, etc. Provide only what the user has actually given you.
         session: Name of a saved login session to reuse (e.g. "amazon") so you act
