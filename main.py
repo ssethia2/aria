@@ -24,7 +24,17 @@ def deliver(markdown_content: str) -> list:
     """Send the briefing via Telegram and email. Returns the channels that worked."""
     delivered = []
 
-    if send_telegram(f"☀️ Good morning! Here's your daily briefing:\n\n{markdown_content}"):
+    # Weather leads the morning (best-effort — never blocks the briefing).
+    weather = ""
+    try:
+        from skills.weather_manager import fetch_weather_lines
+        lines = fetch_weather_lines(days=1)
+        if lines:
+            weather = f"{lines[0]}\n\n"
+    except Exception as e:
+        print(f"Weather for briefing failed: {e}")
+
+    if send_telegram(f"☀️ Good morning! {weather}Here's your daily briefing:\n\n{markdown_content}"):
         delivered.append("telegram")
 
     try:

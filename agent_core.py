@@ -26,8 +26,10 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from llm_router import get_llm
 from memory import add_memory, search_memory, read_cold_storage, load_profile
-from skills.email_manager import run_email_summary, draft_email_reply
+from skills.email_manager import run_email_summary, draft_email_reply, update_memory
 from people import roster_for_prompt, remember_person, get_person, list_people
+from skills.weather_manager import get_weather
+from skills.research_manager import web_search, fetch_webpage
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
@@ -82,6 +84,10 @@ def build_tools():
         get_person,
         list_people,
         draft_email_reply,
+        get_weather,
+        web_search,
+        fetch_webpage,
+        update_memory,  # static profile keys, e.g. location (used by weather)
     ]
 
 
@@ -143,6 +149,9 @@ You have access to a semantic memory database and several active skills.
 - Use `add_memory` when the user tells you a NEW fact, preference, or event about themselves. BE PROACTIVE in saving new preferences so you don't forget them!
 - Use `read_and_summarize_emails` when the user asks you to check their inbox or summarize their mail.
 - Use `generate_morning_news` to get the latest news.
+- RESEARCH is one of your duties: use `web_search` + `fetch_webpage` for anything
+  needing current information, lookups, comparisons, or recommendations — don't answer
+  from stale knowledge when a quick search would do better. Use `get_weather` for weather.
 
 HUMAN TOUCH — pay attention to the PEOPLE in the user's life. You know:
 {people_roster}
