@@ -138,6 +138,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aria.morning-briefin
 ```
 Logs land in `logs/`. To stop: `launchctl bootout gui/$(id -u)/com.aria.telegram-bot`. Don't also run `telegram_bot.py` manually — two pollers on one token cause Telegram 409 conflicts.
 
+### Run Aria on a Raspberry Pi (24/7)
+`pi/` contains systemd units and `setup_pi.sh`; the full checklist (state transfer, gotchas, Playwright-on-ARM fallback) is in [docs/pi-migration.md](docs/pi-migration.md).
+
 ---
 
 ## Optional capabilities

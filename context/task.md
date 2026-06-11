@@ -76,7 +76,8 @@
   - [ ] Phase 2 integrations: Google Calendar read, Apple Notes (AppleScript)
 - [X] Voice v1 (2026-06): Telegram voice notes — transcribed via Gemini (llm_router.transcribe_audio), handled as text
 - [ ] Voice v2: wake-word room device on the Raspberry Pi (after Pi migration)
-- [ ] Pi migration: systemd units + setup script + state transfer (planned for the weekend)
+- [~] Pi migration: kit ready (pi/ units + setup_pi.sh + docs/pi-migration.md) — execution planned for the weekend
+  - [ ] Post-migration: piper-tts for voice replies on the Pi (say is macOS-only)
 - [X] Connectors: Google Calendar (2026-06) — dual-write standing rule (personal + shared-yellow) enforced in create_calendar_event; chat-driven setup; calendar scopes via ADR 0006; events in briefing
 - [ ] Connector backlog: Apple Notes (AppleScript), others as needed
 - [ ] Human Touch Phase (see implementation_plan Phase 8)

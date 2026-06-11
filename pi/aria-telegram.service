@@ -1,0 +1,16 @@
+[Unit]
+Description=Aria Telegram bot + proactivity engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{USER}}
+WorkingDirectory={{APP_DIR}}
+ExecStart={{APP_DIR}}/venv/bin/python3 -u telegram_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:{{APP_DIR}}/logs/telegram_bot.log
+StandardError=append:{{APP_DIR}}/logs/telegram_bot.err.log
+
+[Install]
+WantedBy=multi-user.target

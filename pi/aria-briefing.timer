@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the Aria morning briefing daily at 08:00
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+# Like launchd's on-wake catch-up: if the Pi was off at 08:00, run once at boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
