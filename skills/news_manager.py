@@ -78,8 +78,9 @@ def fetch_daily_newsletters(service):
             
             body = extract_body(msg['payload'])
             
-            # Truncate body if it's extremely long to save token cost
-            max_chars = 15000 
+            # Truncate aggressively — synthesis needs the substance, not the full
+            # newsletter. ~6k chars captures the headlines/lede of each; big token cut.
+            max_chars = 6000
             if len(body) > max_chars:
                 body = body[:max_chars] + "...[TRUNCATED]"
                 

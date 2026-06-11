@@ -141,12 +141,14 @@ def fetch_recent_emails(service, max_results=10):
             subject = next((header['value'] for header in headers if header['name'] == 'Subject'), 'No Subject')
             sender = next((header['value'] for header in headers if header['name'] == 'From'), 'Unknown Sender')
             snippet = msg.get('snippet', '')
-            
+
             email_data.append({
                 'id': message['id'],
                 'subject': subject,
                 'sender': sender,
-                'snippet': snippet
+                'snippet': snippet,
+                'list_unsubscribe': next(
+                    (h['value'] for h in headers if h['name'].lower() == 'list-unsubscribe'), ''),
             })
             
         return email_data
@@ -292,6 +294,15 @@ def run_email_summary():
         return None, None
 
     emails = fetch_recent_emails(service)
+    if not emails:
+        return [], []
+    # Same deterministic pre-filter as the engine digest: don't pay the LLM to
+    # re-classify bulk mail (newsletters/marketing) — it's deterministically "cleaned up".
+    from email_filter import is_bulk
+    bulk = [e for e in emails if is_bulk(e)]
+    emails = [e for e in emails if not is_bulk(e)]
+    if bulk:
+        print(f"Pre-filtered {len(bulk)} bulk email(s) before LLM triage.")
     if not emails:
         return [], []
     # Get the LLM from our unified router
