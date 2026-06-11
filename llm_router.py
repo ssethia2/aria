@@ -87,12 +87,34 @@ def _build_chain(specs):
     return anchor.with_fallbacks(fallbacks) if fallbacks else anchor
 
 
-def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
-    """Transcribe a voice recording via Gemini (the configured multimodal provider).
+_whisper_model = None
 
-    Lives here so provider-SDK access stays centralized (ADR 0001's spirit) even
-    though transcription isn't a chat-model call.
+
+def _get_whisper():
+    """Lazy-load the local Whisper model (downloads ~150MB once, then cached)."""
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+    """Transcribe a voice recording. Local Whisper first (no quota, offline, private —
+    the Gemini free tier is capped at ~20 req/day, which broke voice on day one);
+    Gemini multimodal as fallback. Lives here so provider access stays centralized.
     """
+    import io
+
+    try:
+        segments, _info = _get_whisper().transcribe(io.BytesIO(audio_bytes))
+        text = " ".join(s.text.strip() for s in segments).strip()
+        if text:
+            return text
+        print("[stt] local whisper heard nothing; trying Gemini")
+    except Exception as e:
+        print(f"[stt] local whisper failed ({e}); falling back to Gemini")
+
     from google import genai
     from google.genai import types
 
