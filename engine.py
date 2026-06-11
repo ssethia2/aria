@@ -125,20 +125,25 @@ class CommitmentMonitor(Monitor):
         self.now_fn = now_fn or datetime.now
 
     def check(self, state: dict) -> list:
-        from skills.commitment_manager import get_timed_due_now
+        from skills.commitment_manager import get_pingable_now, advance_recurring
 
         now = self.now_fn()
         today = now.strftime('%Y-%m-%d')
         notified = set(state.get("notified", {}).get(today, []))
 
         out = []
-        for c in get_timed_due_now(now):
-            if c["id"] in notified:
+        for c in get_pingable_now(now):
+            recurring = c.get('is_recurring')
+            if c["id"] in notified and not recurring:
                 continue
             who = f" ({c['who']})" if c.get('who') else ""
-            out.append(Notification(
-                f"⏰ {c['description']}{who} — scheduled for {c['due_time']}"))
-            notified.add(c["id"])
+            when = f" — scheduled for {c['due_time']}" if c.get('due_time') else ""
+            tag = f" (repeats {c['recurring'].replace('_', ' ')})" if recurring else ""
+            out.append(Notification(f"⏰ {c['description']}{who}{when}{tag}"))
+            if recurring:
+                advance_recurring(c["id"], today)  # roll to next occurrence
+            else:
+                notified.add(c["id"])
 
         state["notified"] = {today: sorted(notified)}
         return out

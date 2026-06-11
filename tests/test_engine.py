@@ -156,9 +156,10 @@ class TestEngineMechanics(TempStateMixin, unittest.TestCase):
 
 class TestCommitmentMonitor(TempStateMixin, unittest.TestCase):
     def test_timed_commitment_pings_once(self):
-        due = [{"id": 1, "description": "Call Mom", "who": "Mom", "due_time": "15:00"}]
+        due = [{"id": 1, "description": "Call Mom", "who": "Mom", "due_time": "15:00",
+                "recurring": None, "is_recurring": False}]
         mon = CommitmentMonitor(now_fn=lambda: datetime(2026, 6, 10, 15, 1))
-        with patch('skills.commitment_manager.get_timed_due_now', return_value=due):
+        with patch('skills.commitment_manager.get_pingable_now', return_value=due):
             state = {}
             first = mon.check(state)
             second = mon.check(state)
@@ -167,10 +168,21 @@ class TestCommitmentMonitor(TempStateMixin, unittest.TestCase):
         self.assertIn("15:00", first[0].text)
         self.assertEqual(second, [])  # already pinged today
 
-    def test_nothing_timed_means_silence(self):
+    def test_nothing_pingable_means_silence(self):
         mon = CommitmentMonitor(now_fn=lambda: datetime(2026, 6, 10, 9, 0))
-        with patch('skills.commitment_manager.get_timed_due_now', return_value=[]):
+        with patch('skills.commitment_manager.get_pingable_now', return_value=[]):
             self.assertEqual(mon.check({}), [])
+
+    def test_recurring_fires_and_advances_every_tick(self):
+        due = [{"id": 5, "description": "HubSpot PERM check-in", "who": "HubSpot",
+                "due_time": None, "recurring": "weekly", "is_recurring": True}]
+        mon = CommitmentMonitor(now_fn=lambda: datetime(2026, 6, 12, 10, 0))
+        with patch('skills.commitment_manager.get_pingable_now', return_value=due), \
+             patch('skills.commitment_manager.advance_recurring') as adv:
+            state = {}
+            out = mon.check(state)
+            adv.assert_called_once_with(5, "2026-06-12")   # rolled forward, not deduped
+        self.assertIn("repeats weekly", out[0].text)
 
 
 class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):

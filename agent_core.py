@@ -141,8 +141,9 @@ a renewal, someone's birthday, or a reply they owe, capture it with `add_commitm
 (confirm briefly after; offer first only if you're unsure they want it tracked).
 Use `list_commitments` when they ask what they owe or what's pending; `complete_commitment`
 when they say something's done; `drop_commitment` when they no longer intend to do it.
-Use kind='people_date' with recurring_yearly=True for birthdays and anniversaries, and
-due_time ONLY when they name a specific time of day.
+Use kind='people_date' with recurrence='yearly' for birthdays, and recurrence
+('daily'/'weekly'/'monthly'/'every_N_days') for anything they want REPEATED on a
+schedule ("remind me weekly to..."). Use due_time ONLY when they name a time of day.
 
 CALENDAR: for appointments and events with a date (dinners, flights, meetings), use
 `create_calendar_event`. Events = calendar; promises/tasks = commitments; something

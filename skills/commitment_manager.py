@@ -13,6 +13,7 @@ Storage: `commitments` table in aria_calendar.db; open rows from the legacy remi
 table are migrated in on first init.
 """
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -125,6 +126,65 @@ def get_upcoming_commitments(days=7, today=None):
     return _rows_to_dicts(rows)
 
 
+RECURRENCES = {'daily', 'weekly', 'monthly', 'yearly'}  # plus 'every_N_days'
+DEFAULT_PING_HOUR = 9  # recurring reminders with no specific time ping mid-morning
+
+
+def normalize_recurrence(rec):
+    """Accept 'daily'/'weekly'/'monthly'/'yearly' or 'every_N_days'; else None."""
+    if not rec:
+        return None
+    rec = rec.strip().lower()
+    if rec in RECURRENCES:
+        return rec
+    m = re.match(r'every[_ ](\d+)[_ ]days?', rec)
+    if m:
+        return f"every_{int(m.group(1))}_days"
+    return None
+
+
+def _next_date(date_iso, recurrence):
+    """The next occurrence of date_iso under recurrence (one step forward)."""
+    d = datetime.strptime(date_iso, '%Y-%m-%d')
+    if recurrence == 'daily':
+        return (d + timedelta(days=1)).strftime('%Y-%m-%d')
+    if recurrence == 'weekly':
+        return (d + timedelta(days=7)).strftime('%Y-%m-%d')
+    if recurrence == 'yearly':
+        return f"{d.year + 1}{date_iso[4:]}"
+    if recurrence == 'monthly':
+        month = d.month % 12 + 1
+        year = d.year + (1 if d.month == 12 else 0)
+        day = min(d.day, [31, 29 if year % 4 == 0 else 28, 31, 30, 31, 30,
+                          31, 31, 30, 31, 30, 31][month - 1])
+        return f"{year:04d}-{month:02d}-{day:02d}"
+    m = re.match(r'every_(\d+)_days', recurrence or '')
+    if m:
+        return (d + timedelta(days=int(m.group(1)))).strftime('%Y-%m-%d')
+    return date_iso
+
+
+def advance_recurring(commitment_id, today=None):
+    """Roll a recurring commitment's due_date forward to the next FUTURE occurrence
+    (skips past missed periods in one jump, so a long-offline gap = one catch-up
+    ping, not a burst). No-op for non-recurring."""
+    today = today or datetime.now().strftime('%Y-%m-%d')
+    conn = _conn()
+    row = conn.execute("SELECT recurring, due_date FROM commitments WHERE id = ?",
+                       (commitment_id,)).fetchone()
+    if not row or not row[0] or not row[1]:
+        conn.close()
+        return
+    recurrence, due = row
+    guard = 0
+    while due <= today and guard < 500:
+        due = _next_date(due, recurrence)
+        guard += 1
+    conn.execute("UPDATE commitments SET due_date = ? WHERE id = ?", (due, commitment_id))
+    conn.commit()
+    conn.close()
+
+
 def get_timed_due_now(now=None):
     """Open commitments scheduled for a specific time today whose moment has arrived."""
     now = now or datetime.now()
@@ -138,8 +198,32 @@ def get_timed_due_now(now=None):
     return _rows_to_dicts(rows)
 
 
+def get_pingable_now(now=None):
+    """Everything that should ping right now: timed commitments at their time, and
+    recurring reminders whose occurrence has arrived (mid-morning if no time set).
+    Recurring entries carry a True 'is_recurring' so the caller can advance them."""
+    now = now or datetime.now()
+    today = now.strftime('%Y-%m-%d')
+    hhmm = now.strftime('%H:%M')
+    conn = _conn()
+    rows = conn.execute(
+        f"{_SELECT} WHERE status = 'open' AND due_date IS NOT NULL AND due_date <= ? "
+        "AND (due_time IS NOT NULL OR recurring IS NOT NULL)", (today,)).fetchall()
+    conn.close()
+    out = []
+    for c in _rows_to_dicts(rows):
+        if c['due_time']:
+            ready = (c['due_date'] < today) or (c['due_time'] <= hhmm)
+        else:  # recurring, no specific time
+            ready = now.hour >= DEFAULT_PING_HOUR
+        if ready:
+            c['is_recurring'] = bool(c['recurring'])
+            out.append(c)
+    return out
+
+
 def complete(commitment_id):
-    """Mark done. Yearly-recurring dates roll to next year instead of closing."""
+    """Mark done. Recurring commitments roll to their next occurrence instead of closing."""
     conn = _conn()
     row = conn.execute(
         "SELECT description, recurring, due_date FROM commitments WHERE id = ? AND status = 'open'",
@@ -148,11 +232,11 @@ def complete(commitment_id):
         conn.close()
         return None
     description, recurring, due_date = row
-    if recurring == 'yearly' and due_date:
-        next_due = f"{int(due_date[:4]) + 1}{due_date[4:]}"
+    if recurring and due_date:
+        next_due = _next_date(due_date, recurring)
         conn.execute("UPDATE commitments SET due_date = ? WHERE id = ?",
                      (next_due, commitment_id))
-        result = f"'{description}' done for this year — rolled to {next_due}."
+        result = f"'{description}' done for now — next {recurring.replace('_', ' ')}: {next_due}."
     else:
         conn.execute(
             "UPDATE commitments SET status = 'done', completed_at = ? WHERE id = ?",
@@ -192,21 +276,24 @@ def format_line(c, today=None):
 @tool
 def add_commitment(description: str, kind: str = 'promise', who: str = None,
                    due_date_iso: str = None, due_time: str = None,
-                   recurring_yearly: bool = False) -> str:
+                   recurrence: str = None) -> str:
     """Track something the user has committed to or must not forget. BE PROACTIVE:
-    when the user mentions a promise, a deadline, someone's birthday, or a reply they
-    owe — even in passing — offer to track it, or just track it if they asked.
+    when the user mentions a promise, a deadline, someone's birthday, a reply owed, or
+    asks to be reminded of something repeatedly — even in passing — track it.
 
     Args:
-        description: What needs to happen (e.g. "Reply to Rohan about the trip",
-            "Renew passport", "Mom's birthday", "Help Dad move").
+        description: What needs to happen (e.g. "Reply to Rohan", "Renew passport",
+            "Check in with HubSpot on my PERM filing").
         kind: One of 'reply_owed', 'deadline', 'people_date', 'promise'.
-        who: The person involved, if any (e.g. "Rohan", "Mom").
-        due_date_iso: Due date YYYY-MM-DD. Compute exact dates from words like
-            "tomorrow"/"Friday" using the current date. Omit if genuinely undated.
-        due_time: HH:MM 24h — ONLY when the user names a specific time ("at 3pm" -> 15:00).
-            Timed commitments get pinged at that moment.
-        recurring_yearly: True for birthdays/anniversaries — completing rolls to next year.
+        who: The person/org involved, if any.
+        due_date_iso: Due date YYYY-MM-DD (compute from "tomorrow"/"Friday"). For a
+            recurring reminder this is the FIRST occurrence. Omit if genuinely undated.
+        due_time: HH:MM 24h — ONLY when a specific time is named. Timed/recurring
+            commitments ping; date-only non-recurring ones surface in the briefing.
+        recurrence: makes it a REPEATING reminder that re-fires on a schedule until
+            dropped. One of 'daily', 'weekly', 'monthly', 'yearly', or 'every_N_days'
+            (e.g. 'every_3_days'). Use 'yearly' for birthdays. A weekly check-in =
+            recurrence='weekly' with due_date_iso set to the first one.
     """
     if due_date_iso:
         try:
@@ -218,10 +305,17 @@ def add_commitment(description: str, kind: str = 'promise', who: str = None,
             datetime.strptime(due_time, '%H:%M')
         except ValueError:
             return f"Error: due_time must be HH:MM (24h), got {due_time}."
+    rec = normalize_recurrence(recurrence)
+    if recurrence and not rec:
+        return (f"Error: recurrence must be daily/weekly/monthly/yearly/every_N_days, "
+                f"got {recurrence!r}.")
+    if rec and not due_date_iso:
+        return "Error: a recurring reminder needs a first due_date_iso."
     cid = add(description, kind=kind, who=who, due_date=due_date_iso, due_time=due_time,
-              recurring=('yearly' if recurring_yearly else None))
+              recurring=rec)
     when = f" for {due_date_iso}{' ' + due_time if due_time else ''}" if due_date_iso else ""
-    return f"Tracked commitment #{cid}: '{description}'{when}."
+    rec_note = f", repeating {rec.replace('_', ' ')}" if rec else ""
+    return f"Tracked commitment #{cid}: '{description}'{when}{rec_note}."
 
 
 @tool

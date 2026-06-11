@@ -72,6 +72,41 @@ class TestStore(TempDBMixin, unittest.TestCase):
         self.assertEqual(len(open_), 1)
         self.assertEqual(open_[0]['due_date'], "2027-07-03")
 
+    def test_next_date_per_recurrence(self):
+        self.assertEqual(cm._next_date("2026-06-12", "daily"), "2026-06-13")
+        self.assertEqual(cm._next_date("2026-06-12", "weekly"), "2026-06-19")
+        self.assertEqual(cm._next_date("2026-06-12", "monthly"), "2026-07-12")
+        self.assertEqual(cm._next_date("2026-12-31", "monthly"), "2027-01-31")
+        self.assertEqual(cm._next_date("2026-06-12", "yearly"), "2027-06-12")
+        self.assertEqual(cm._next_date("2026-06-12", "every_3_days"), "2026-06-15")
+
+    def test_normalize_recurrence(self):
+        self.assertEqual(cm.normalize_recurrence("Weekly"), "weekly")
+        self.assertEqual(cm.normalize_recurrence("every 3 days"), "every_3_days")
+        self.assertIsNone(cm.normalize_recurrence("sometimes"))
+
+    def test_advance_recurring_skips_missed_periods_in_one_jump(self):
+        # Weekly reminder due 3 weeks ago + bot offline → roll to next future, once.
+        cid = cm.add("weekly check-in", due_date="2026-05-22", recurring="weekly")
+        cm.advance_recurring(cid, today="2026-06-12")
+        due = cm.get_open_commitments()[0]['due_date']
+        self.assertGreater(due, "2026-06-12")          # strictly future
+        self.assertEqual(due, "2026-06-19")             # next weekly slot
+
+    def test_pingable_includes_recurring_after_default_hour(self):
+        cm.add("daily standup nudge", due_date="2026-06-12", recurring="daily")
+        morning = cm.get_pingable_now(datetime(2026, 6, 12, 10, 0))
+        self.assertEqual(len(morning), 1)
+        self.assertTrue(morning[0]['is_recurring'])
+        early = cm.get_pingable_now(datetime(2026, 6, 12, 6, 0))  # before 9am
+        self.assertEqual(early, [])
+
+    def test_recurring_complete_rolls_forward(self):
+        cid = cm.add("water plants", due_date="2026-06-12", recurring="every_3_days")
+        msg = cm.complete(cid)
+        self.assertIn("2026-06-15", msg)
+        self.assertEqual(cm.get_open_commitments()[0]['due_date'], "2026-06-15")
+
     def test_drop_removes_from_open(self):
         cid = cm.add("never mind")
         self.assertTrue(cm.drop(cid))
