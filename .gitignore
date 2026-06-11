@@ -46,6 +46,7 @@ calendar_config.json
 instructions.json
 people.json
 notes/
+grocery_list.json
 
 # OS generated files
 .DS_Store

@@ -31,6 +31,8 @@ from people import roster_for_prompt, remember_person, get_person, list_people
 from skills.weather_manager import get_weather
 from skills.research_manager import web_search, fetch_webpage
 from skills.notes_manager import create_note, append_to_note, search_notes, read_note
+from skills.grocery_manager import (add_to_grocery_list, view_grocery_list,
+                                    remove_from_grocery_list, clear_grocery_list)
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
@@ -93,6 +95,10 @@ def build_tools():
         append_to_note,
         search_notes,
         read_note,
+        add_to_grocery_list,
+        view_grocery_list,
+        remove_from_grocery_list,
+        clear_grocery_list,
     ]
 
 
@@ -161,6 +167,12 @@ You have access to a semantic memory database and several active skills.
   `create_note`/`append_to_note` for lists, plans, and reference info he wants kept;
   `search_notes`/`read_note` when he asks about anything he noted down. Actionable
   todos are commitments, not notes — split them out when both appear together.
+- GROCERIES & RECIPES: maintain a running grocery list with `add_to_grocery_list` /
+  `view_grocery_list` / `remove_from_grocery_list` / `clear_grocery_list` (clear it
+  after a shopping trip). When he names a dish or recipe ("add stuff for butter
+  chicken"), work out the ingredients yourself — from recipe text, a URL via
+  fetch_webpage, or your own knowledge — and add them all at once. Mention if a few
+  pantry staples (salt, oil) are probably already on hand rather than padding the list.
 
 HUMAN TOUCH — pay attention to the PEOPLE in the user's life. You know:
 {people_roster}
