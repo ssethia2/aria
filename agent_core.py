@@ -20,6 +20,7 @@ import sqlite3
 from datetime import datetime
 
 from langchain_core.tools import tool
+from langchain_core.messages import SystemMessage
 from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt, ModelRequest
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -27,7 +28,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from llm_router import get_llm
 from memory import add_memory, search_memory, read_cold_storage, load_profile
 from skills.email_manager import run_email_summary, draft_email_reply, update_memory
-from people import roster_for_prompt, remember_person, get_person, list_people
+from people import remember_person, get_person, list_people
 from skills.weather_manager import get_weather
 from skills.research_manager import web_search, fetch_webpage
 from skills.notes_manager import create_note, append_to_note, search_notes, read_note
@@ -119,21 +120,19 @@ def build_tools():
     ]
 
 
-def build_system_prompt() -> str:
-    """Build the system prompt with the current time and profile injected fresh.
-
-    Keep this identity + behavior only — no mutable state. Engine actions reach the
-    agent as messages appended to the conversation thread (see telegram_bot.py), and
-    older ones via search_memory; injecting them here would bloat every model call.
+def _stable_prompt() -> str:
+    """The cacheable system prompt: identity + tool guidance + standing instructions +
+    profile. Deliberately holds NOTHING that changes per turn (the live timestamp lives
+    in a separate uncached block; the people roster is gone — Aria uses list_people /
+    get_person on demand). Stable across turns = Anthropic prompt-cache hits on the big
+    tools+system prefix, the major chat-cost lever. Changes only when the user edits a
+    standing rule or profile (rare), which is the right time to rebuild the cache.
     """
     profile_data = load_profile()
-    current_time = datetime.now().strftime('%A, %Y-%m-%d %H:%M:%S')
     standing_instructions = render_for_prompt()
-    people_roster = roster_for_prompt()
 
     return f"""You are Aria (Aria Responds Intelligently Always), a highly intelligent, proactive, and friendly personal AI assistant.
 Your goal is to help your user manage their life, emails, and news.
-The current date and time is: {current_time}. Keep this in mind when computing dates for commitments.
 
 YOUR CORE DUTY is making sure nothing the user commits to ever slips. Telling you IS their
 system of record. When they mention — even in passing — a promise to someone, a deadline,
@@ -201,13 +200,14 @@ You have access to a semantic memory database and several active skills.
 - SMART HOME: `control_light` (on/off, brightness, color) and `list_lights` operate his
   Matter lights via Home Assistant. "turn off the lights" → control_light("all", "off").
 
-HUMAN TOUCH — pay attention to the PEOPLE in the user's life. You know:
-{people_roster}
-- When they mention someone NOT on that roster — by name or by role ("my girlfriend",
-  "my boss") — ask who they are naturally (ONE question) and save them with
-  `remember_person` (relation, alias like "girlfriend", birthday if given). Lasting
-  facts about a person go in their record (note=...), not loose memory.
-- Use `get_person` before asking anything you might already know. NEVER re-ask a
+HUMAN TOUCH — pay attention to the PEOPLE in the user's life. Use `list_people` to see
+who you already know and `get_person` to recall details about one of them.
+- When they mention someone you don't recognize — by name or role ("my girlfriend",
+  "my boss") — check with `get_person`/`list_people` first; if still unknown, ask who
+  they are naturally (ONE question) and save them with `remember_person` (relation,
+  alias like "girlfriend", birthday if given). Lasting facts about a person go in their
+  record (note=...), not loose memory.
+- Check `get_person` before asking anything you might already know. NEVER re-ask a
   known fact — that is the cardinal sin of fake-human assistants.
 - Saving a birthday auto-tracks it yearly; you never need a separate reminder for it.
 - When something you're saving is missing a key detail (a commitment with no date, a
@@ -222,9 +222,23 @@ Be conversational, concise, and helpful. You do not need to explain the steps yo
 """
 
 
+def build_system_message() -> SystemMessage:
+    """System message as two blocks: a cache_control-marked STABLE block (cached across
+    turns with the tool schemas — the big cost saver) and a tiny VOLATILE block holding
+    the live timestamp after the cache breakpoint, so the clock can't bust the cache."""
+    now = datetime.now().strftime('%A, %Y-%m-%d %H:%M:%S')
+    return SystemMessage(content=[
+        {"type": "text", "text": _stable_prompt(),
+         "cache_control": {"type": "ephemeral"}},
+        {"type": "text",
+         "text": f"The current date and time is: {now}. Use this for any date math "
+                 f"(e.g. computing a commitment's date from 'tomorrow' or 'Friday')."},
+    ])
+
+
 @dynamic_prompt
-def _fresh_system_prompt(request: ModelRequest) -> str:
-    return build_system_prompt()
+def _fresh_system_prompt(request: ModelRequest) -> SystemMessage:
+    return build_system_message()
 
 
 def open_checkpointer() -> SqliteSaver:
