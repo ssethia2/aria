@@ -18,6 +18,9 @@ The allowlist is REQUIRED in normal use — anyone who finds the bot can message
 and Aria has access to your email. Run: `python3 telegram_bot.py`.
 """
 import os
+import subprocess
+import tempfile
+import threading
 import time
 
 import requests
@@ -50,12 +53,82 @@ def send_message(chat_id, text: str):
             print(f"[send error] {e}")
 
 
-def show_typing(chat_id):
+class TypingPulse:
+    """Keep Telegram's chat action ('typing…' / 'recording voice…') alive while we
+    work — a single sendChatAction expires after ~5s, leaving the user staring at
+    radio silence during long agent runs.
+    """
+
+    def __init__(self, chat_id, action="typing"):
+        self.chat_id, self.action = chat_id, action
+        self._stop = threading.Event()
+
+    def __enter__(self):
+        def beat():
+            while not self._stop.is_set():
+                try:
+                    requests.post(f"{API}/sendChatAction",
+                                  json={"chat_id": self.chat_id, "action": self.action},
+                                  timeout=10)
+                except Exception:
+                    pass
+                self._stop.wait(4)
+        threading.Thread(target=beat, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+
+
+def synthesize_voice_note(text: str):
+    """Render text to an OGG/Opus voice note. Returns the file path, or None.
+
+    macOS `say` for synthesis + PyAV (bundled with faster-whisper) to transcode
+    AIFF -> Opus, Telegram's required voice format. On the Pi this swaps to
+    piper-tts — same interface.
+    """
+    import av
+    aiff = ogg = None
     try:
-        requests.post(f"{API}/sendChatAction",
-                      json={"chat_id": chat_id, "action": "typing"}, timeout=10)
-    except Exception:
-        pass
+        with tempfile.NamedTemporaryFile(suffix='.aiff', delete=False) as f:
+            aiff = f.name
+        ogg = aiff.replace('.aiff', '.ogg')
+        subprocess.run(['say', '-o', aiff, text[:3000]], check=True, timeout=60)
+
+        inp = av.open(aiff)
+        out = av.open(ogg, 'w', format='ogg')
+        stream = out.add_stream('libopus', rate=48000)
+        resampler = av.AudioResampler(format='s16', layout='mono', rate=48000)
+        for frame in inp.decode(audio=0):
+            for rf in resampler.resample(frame):
+                for packet in stream.encode(rf):
+                    out.mux(packet)
+        for packet in stream.encode(None):
+            out.mux(packet)
+        out.close()
+        inp.close()
+        return ogg
+    except Exception as e:
+        print(f"[tts] synthesis failed: {e}")
+        if ogg and os.path.exists(ogg):
+            os.unlink(ogg)
+        return None
+    finally:
+        if aiff and os.path.exists(aiff):
+            os.unlink(aiff)
+
+
+def send_voice_note(chat_id, ogg_path, caption=None):
+    """Send a voice note; caption carries the text when it fits (≤1024 chars)."""
+    try:
+        with open(ogg_path, 'rb') as f:
+            requests.post(f"{API}/sendVoice",
+                          data={"chat_id": chat_id, "caption": (caption or "")[:1024]},
+                          files={"voice": f}, timeout=60)
+        return True
+    except Exception as e:
+        print(f"[tts] sendVoice failed: {e}")
+        return False
 
 
 def transcribe_voice_message(file_id: str) -> str:
@@ -143,14 +216,15 @@ def main():
                 continue
 
             # Voice notes: transcribe AFTER the allowlist gate, then treat as text.
+            was_voice = False
             if not text and "voice" in message:
                 if message["voice"].get("duration", 0) > 300:
                     send_message(chat_id, "That voice note is over 5 minutes — could you "
                                           "send a shorter one (or type it)?")
                     continue
-                show_typing(chat_id)
                 try:
-                    text = transcribe_voice_message(message["voice"]["file_id"])
+                    with TypingPulse(chat_id):
+                        text = transcribe_voice_message(message["voice"]["file_id"])
                 except Exception as e:
                     print(f"[voice] transcription failed: {e}")
                     send_message(chat_id, "Sorry, I couldn't make out that voice note — "
@@ -159,6 +233,7 @@ def main():
                 if not text:
                     send_message(chat_id, "I couldn't hear anything in that voice note.")
                     continue
+                was_voice = True
                 send_message(chat_id, f"🎙️ Heard: “{text}”")
 
             if not text:
@@ -169,18 +244,31 @@ def main():
                                       "your email, news, reminders, and more.")
                 continue
 
-            show_typing(chat_id)
             try:
-                # The checkpointer holds the conversation; we send only the new message.
-                result = agent.invoke({"messages": [HumanMessage(content=text)]},
-                                      config=thread_config(f"telegram-{chat_id}"))
-                reply = extract_text(result["messages"][-1].content)
+                # Pulse keeps "typing…" alive for the whole agent run — no radio silence.
+                with TypingPulse(chat_id):
+                    # The checkpointer holds the conversation; only the new message is sent.
+                    result = agent.invoke({"messages": [HumanMessage(content=text)]},
+                                          config=thread_config(f"telegram-{chat_id}"))
+                    reply = extract_text(result["messages"][-1].content)
             except Exception as e:
                 reply = f"Sorry, something went wrong: {e}"
                 print(f"[agent error] {e}")
 
-            send_message(chat_id, reply)
-            print(f"[{chat_id}] {text[:60]!r} -> {str(reply)[:80]!r}")
+            # Reply in kind: spoken question gets a spoken answer (text rides along).
+            delivered = False
+            if was_voice:
+                with TypingPulse(chat_id, action="record_voice"):
+                    ogg = synthesize_voice_note(reply)
+                if ogg:
+                    caption = reply if len(reply) <= 1024 else None
+                    delivered = send_voice_note(chat_id, ogg, caption=caption)
+                    if delivered and caption is None:
+                        send_message(chat_id, reply)  # full text when too long for caption
+                    os.unlink(ogg)
+            if not delivered:
+                send_message(chat_id, reply)
+            print(f"[{chat_id}] {'🎙️ ' if was_voice else ''}{text[:60]!r} -> {str(reply)[:80]!r}")
 
 
 if __name__ == "__main__":
