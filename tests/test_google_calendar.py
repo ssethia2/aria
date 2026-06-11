@@ -49,13 +49,37 @@ class TestStandingRule(TempConfigMixin, unittest.TestCase):
         self.assertIn('personal', msg)
         self.assertIn('us (yellow)', msg)
 
+    def test_personal_only_deviation_skips_shared(self):
+        gc._save_config({'shared_calendar_id': 'gf123'})
+        service = _service()
+        with patch.object(gc, 'get_calendar_service', return_value=service):
+            msg = gc.create_calendar_event.invoke({
+                'title': 'Secret gift shopping', 'date_iso': '2026-06-20',
+                'calendars': 'personal_only'})
+        calls = service.events.return_value.insert.call_args_list
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].kwargs['calendarId'], 'primary')
+        self.assertNotIn('yellow', msg)
+
+    def test_shared_only_deviation_skips_personal(self):
+        gc._save_config({'shared_calendar_id': 'gf123'})
+        service = _service()
+        with patch.object(gc, 'get_calendar_service', return_value=service):
+            gc.create_calendar_event.invoke({
+                'title': 'Her thing', 'date_iso': '2026-06-20',
+                'calendars': 'shared_only'})
+        calls = service.events.return_value.insert.call_args_list
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].kwargs['calendarId'], 'gf123')
+        self.assertEqual(calls[0].kwargs['body']['colorId'], gc.YELLOW)
+
     def test_unconfigured_shared_creates_personal_and_flags_setup(self):
         service = _service()
         with patch.object(gc, 'get_calendar_service', return_value=service):
             msg = gc.create_calendar_event.invoke({
                 'title': 'Dentist', 'date_iso': '2026-06-15'})
         self.assertEqual(service.events.return_value.insert.call_count, 1)
-        self.assertIn("isn't configured", msg)
+        self.assertIn("not configured", msg)
 
     def test_timed_event_has_times_allday_has_dates(self):
         timed = gc._event_body('X', '2026-06-14', '19:00', '21:00')

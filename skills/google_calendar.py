@@ -104,12 +104,10 @@ def configure_shared_calendar(calendar_id: str, label: str = "shared") -> str:
 
 @tool
 def create_calendar_event(title: str, date_iso: str, start_time: str = None,
-                          end_time: str = None, description: str = None) -> str:
-    """Create an event on the user's calendars. STANDING RULE (enforced here, don't
-    second-guess it): the event goes on BOTH his personal calendar (default
-    notifications) AND the shared calendar (visible to his girlfriend, colored
-    yellow). Use this for appointments/events with a date — commitments/promises
-    belong in add_commitment instead.
+                          end_time: str = None, description: str = None,
+                          calendars: str = 'both') -> str:
+    """Create an event on the user's calendar(s). Use this for appointments/events
+    with a date — commitments/promises belong in add_commitment instead.
 
     Args:
         title: Event title (e.g. "Dinner with Priya").
@@ -117,7 +115,12 @@ def create_calendar_event(title: str, date_iso: str, start_time: str = None,
         start_time: HH:MM 24h. Omit for an all-day event.
         end_time: HH:MM 24h. Defaults to one hour after start.
         description: Optional details/location.
+        calendars: 'both' (DEFAULT — follow the user's standing instruction: personal
+            + shared-in-yellow), 'personal_only', or 'shared_only'. Deviate from
+            'both' ONLY when the user explicitly asks (e.g. "just my personal").
     """
+    if calendars not in ('both', 'personal_only', 'shared_only'):
+        return f"Error: calendars must be 'both', 'personal_only', or 'shared_only', got {calendars!r}."
     try:
         datetime.strptime(date_iso, '%Y-%m-%d')
         if start_time:
@@ -132,24 +135,30 @@ def create_calendar_event(title: str, date_iso: str, start_time: str = None,
         return "Calendar isn't connected yet — the Google token needs the calendar scopes (re-auth required)."
 
     body = _event_body(title, date_iso, start_time, end_time, description)
-    created = []
-
-    personal = service.events().insert(calendarId='primary', body=body).execute()
-    created.append("personal")
-
     cfg = _load_config()
     shared_id = cfg.get('shared_calendar_id')
-    if shared_id:
-        shared_body = dict(body, colorId=YELLOW)
-        service.events().insert(calendarId=shared_id, body=shared_body).execute()
-        created.append(f"{cfg.get('shared_calendar_label', 'shared')} (yellow)")
-    else:
-        return (f"Created '{title}' on the personal calendar — but the shared calendar "
-                "isn't configured yet. Run calendar setup (list_my_calendars, then "
-                "configure_shared_calendar) so events reach it too.")
+    created, notes = [], []
+
+    if calendars in ('both', 'personal_only'):
+        service.events().insert(calendarId='primary', body=body).execute()
+        created.append("personal")
+
+    if calendars in ('both', 'shared_only'):
+        if shared_id:
+            shared_body = dict(body, colorId=YELLOW)
+            service.events().insert(calendarId=shared_id, body=shared_body).execute()
+            created.append(f"{cfg.get('shared_calendar_label', 'shared')} (yellow)")
+        elif calendars == 'shared_only':
+            return ("The shared calendar isn't configured yet — run calendar setup "
+                    "(list_my_calendars, then configure_shared_calendar) first.")
+        else:
+            notes.append("shared calendar not configured yet — set it up so events reach it too")
 
     when = date_iso + (f" {start_time}" + (f"–{end_time}" if end_time else "") if start_time else " (all day)")
-    return f"Created '{title}' ({when}) on: {', '.join(created)}."
+    msg = f"Created '{title}' ({when}) on: {', '.join(created)}."
+    if notes:
+        msg += f" (Note: {'; '.join(notes)}.)"
+    return msg
 
 
 @tool

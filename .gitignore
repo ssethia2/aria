@@ -43,6 +43,7 @@ logs/
 engine_state.json
 router_alerts.json
 calendar_config.json
+instructions.json
 
 # OS generated files
 .DS_Store
