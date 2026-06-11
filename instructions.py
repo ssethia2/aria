@@ -58,7 +58,13 @@ def add_standing_instruction(instruction: str) -> str:
     items.append({'id': new_id, 'instruction': instruction,
                   'updated': datetime.now().strftime('%Y-%m-%d')})
     _save(items)
-    return f"Standing instruction #{new_id} saved. It's now in force on every conversation."
+    msg = f"Standing instruction #{new_id} saved. It's now in force on every conversation."
+    if len(items) > 25:
+        # Soft guardrail against the junk-drawer trajectory — every rule is read
+        # on every turn, so the registry must stay a curated constitution.
+        msg += (f" NOTE: the registry now has {len(items)} rules — suggest to the user "
+                "a quick review to merge overlaps and drop stale ones.")
+    return msg
 
 
 @tool

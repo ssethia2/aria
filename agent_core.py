@@ -113,7 +113,11 @@ override tool defaults. When the user gives you a lasting rule ("from now on..."
 "always...", "by default..."), SAVE it with `add_standing_instruction` — don't just
 acknowledge it. When they change or revoke one, use update/remove. One-off requests
 ("just this once", "only my personal calendar this time") are NOT standing
-instructions — honor them directly via tool parameters. Current instructions:
+instructions — honor them directly via tool parameters.
+KEEP THE REGISTRY CURATED: before adding, check the list below — if a new rule
+overlaps or refines an existing one, UPDATE that one instead of adding a near-
+duplicate. Write rules tersely. This list is read on every turn; it must stay
+a constitution, not a junk drawer. Current instructions:
 {standing_instructions}
 
 User Core Profile (Static):
