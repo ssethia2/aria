@@ -72,8 +72,8 @@
   - [X] Engine: EmailDigestMonitor (18:00 digest, no instant pings) replaces ImportantEmailMonitor; replies-owed auto-become commitments
   - [X] Morning briefing leads with due/overdue + upcoming commitments
   - [X] Chase loop: ChaseMonitor — daytime LLM judgment over open commitments, max one warm nudge/day
-  - [ ] On-demand email reply drafting (Gmail drafts API — sends nothing)
-  - [ ] Phase 2 integrations: Google Calendar read, Apple Notes (AppleScript)
+  - [X] On-demand email reply drafting (draft_email_reply — Gmail/IMAP drafts, sends nothing)
+  - [X] Google Calendar (dual-write create + fetch-based edit/delete); Apple Notes connector (import = one command)
 - [X] Voice v1 (2026-06): Telegram voice notes — transcribed via Gemini (llm_router.transcribe_audio), handled as text
 - [ ] Voice v2: wake-word room device on the Raspberry Pi (after Pi migration)
 - [~] Pi migration: kit ready (pi/ units + setup_pi.sh + docs/pi-migration.md) — execution planned for the weekend
@@ -84,10 +84,14 @@
   - [X] healthcheck.py self-diagnosis: doctor CLI + get_system_status tool + startup check + HealthMonitor watchdog
   - [X] External dead-man's-switch (heartbeat.py + HeartbeatMonitor → HEARTBEAT_URL/healthchecks.io); doctor flags when unset. User sets HEARTBEAT_URL on the Pi.
   - [X] Self-host onboarding: setup.sh (one command), .env.example, USER_EMAIL allowlist fallback, README quick-start, doctor as config validator
-  - [ ] First-run interactive wizard (prompt for the 3 required values) — nice-to-have
+  - [X] First-run interactive wizard (setup_wizard.py; setup.sh launches it)
+  - [ ] Calendar read without OAuth (secret .ics URL) — no-Google-project on-ramp for others
   - [ ] Decide distribution model: self-hostable (recommended) vs multi-tenant
-- [ ] Human Touch Phase (see implementation_plan Phase 8)
+- [~] Human Touch Phase (see implementation_plan Phase 8)
   - [X] Relational curiosity in system prompt: ask unnamed people's names once, check memory before asking, one follow-up question for missing details
-  - [ ] People model: first-class person entities linked to commitments + memory
-  - [ ] Conversational callbacks ("how did X go?") from saved circle-back memories
+  - [X] People model: first-class person entities (people.py) linked to commitments + memory
+  - [ ] Conversational callbacks ("how did X go?") — user skeptical; maybe try
   - [ ] Tone & continuity pass
+- Open builds (no keys/host): change-detection gates on Insight/Chase; config-driven call_api connector
+- Needs a key: travel search (Amadeus); Spotify; maps/commute
+- Needs the host (Pi/HP laptop): HEARTBEAT_URL, Home Assistant, piper-tts, voice v2
