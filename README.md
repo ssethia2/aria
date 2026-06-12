@@ -85,7 +85,7 @@ Design rationale and the decision record live in [`docs/`](docs/):
 - **[docs/architecture.md](docs/architecture.md)** — memory, agent core, router, engine, repo map
 - **[docs/setup.md](docs/setup.md)** — full setup & configuration reference
 - **[docs/adr/](docs/adr/)** — architecture decision records (why these choices)
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — conventions + the "add a skill" recipe
+<!-- - **[CONTRIBUTING.md](CONTRIBUTING.md)** — conventions + the "add a skill" recipe -->
 
 Offline test suite: `python3 -m unittest discover tests` (160+ tests, all network/LLM mocked).
 
