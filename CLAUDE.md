@@ -3,7 +3,9 @@
 Guidance for Claude Code working in this repo. Aria is a modular personal AI assistant (Gmail triage, news brief, reminders, autonomous chores) built on LangChain/LangGraph.
 
 ## Orientation
-- **[README.md](README.md)** — what runs and how to run it.
+- **[README.md](README.md)** — public showcase: what it is and why it's interesting.
+- **[docs/architecture.md](docs/architecture.md)** — how it's built (memory, agent, router, engine, repo map).
+- **[docs/setup.md](docs/setup.md)** — full setup & configuration reference.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — conventions + the "add a skill" recipe.
 - **[context/implementation_plan.md](context/implementation_plan.md)** — design rationale, phased (dated) roadmap.
 - **[context/task.md](context/task.md)** — task checklist / current status.

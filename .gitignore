@@ -58,3 +58,6 @@ ehthumbs.db
 Thumbs.db
 
 browser_sessions/
+
+allow.json
+profile.json
