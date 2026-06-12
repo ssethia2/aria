@@ -51,7 +51,8 @@ from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
                                        complete_commitment, drop_commitment)
 from skills.google_calendar import (create_calendar_event, get_calendar_events,
-                                    list_my_calendars, configure_shared_calendar)
+                                    list_my_calendars, configure_shared_calendar,
+                                    update_calendar_event, delete_calendar_event)
 from instructions import (render_for_prompt, add_standing_instruction,
                           update_standing_instruction, remove_standing_instruction)
 
@@ -91,6 +92,8 @@ def build_tools():
         drop_commitment,
         create_calendar_event,
         get_calendar_events,
+        update_calendar_event,
+        delete_calendar_event,
         list_my_calendars,
         configure_shared_calendar,
         add_standing_instruction,
@@ -145,7 +148,10 @@ Use kind='people_date' with recurrence='yearly' for birthdays, and recurrence
 schedule ("remind me weekly to..."). Use due_time ONLY when they name a time of day.
 
 CALENDAR: for appointments and events with a date (dinners, flights, meetings), use
-`create_calendar_event`. Events = calendar; promises/tasks = commitments; something
+`create_calendar_event`. To change one, use `update_calendar_event` (rename/reschedule);
+to remove one, `delete_calendar_event` — both find the event by searching and update
+every copy (personal + shared), so you can now fix a wrong event yourself instead of
+asking the user to delete it. Events = calendar; promises/tasks = commitments; something
 can be both. Use `get_calendar_events` when asked about the schedule.
 
 STANDING INSTRUCTIONS — the user's persistent rules. They are ALWAYS in force and

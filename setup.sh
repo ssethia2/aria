@@ -16,10 +16,10 @@ pip install --quiet -r requirements.txt
 
 echo "[3/5] Config..."
 if [ ! -f .env ]; then
-    cp .env.example .env
-    echo "    → created .env from template — you'll fill it in below"
+    echo "    → no .env yet — launching the guided wizard"
+    python3 setup_wizard.py || cp .env.example .env
 else
-    echo "    → .env already exists, leaving it"
+    echo "    → .env already exists (run 'python3 setup_wizard.py' to edit it)"
 fi
 
 echo "[4/5] Browser engine (for Netflix + web automation; optional)..."
