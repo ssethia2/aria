@@ -2,7 +2,7 @@
 
 > *Aria Responds Intelligently Always.* A self-hosted, memory-aware personal assistant you talk to from your phone — it keeps your commitments, triages your inbox, manages your calendar, and reaches out *unprompted* when something's worth your attention. Your hardware, your keys, your data.
 
-Most "AI assistants" are a chat box with a system prompt. Aria is built around the parts that make an assistant feel like it *knows you and works for you*: a layered memory that learns over time, a model of the people in your life, rules you can set in plain language, and a background engine that exercises judgment about when to speak. You message it on Telegram — by text or voice — and it lives on a machine you own.
+Most "AI assistants" are a chat box with a system prompt that cannot handle large context windows inexpensively, and push you to start new conversations every time. Context is not reliably available across chats, and relevant information is buried in a sea of useless tokens. Aria is built around the parts that make an assistant feel like it *knows you and works for you*: a layered memory that remembers the information that matters and learns over time, a model of the people in your life, rules you can set in plain language, and a background engine that exercises judgment about when to speak. You message it on Telegram — by text or voice — and it lives on a machine you own. All your personal data is stored on your device, but will be used by the underlying LLM. 
 
 ```
 You:  btw I told my dad I'd help him set up his new phone this weekend,
@@ -14,6 +14,10 @@ Aria: Both tracked 📱🎂 — helping your dad this Saturday, and Priya's birt
 Aria: 💡 Heads-up: heavy rain Saturday morning, right when you're set to play
       tennis with Dev at 10 — might be worth checking with him about an indoor court.
 ```
+
+### ⚡ Coming very soon
+
+A voice platform that will transform ARIA from yet another chatbot into a true personal assistant. Because let's be real, aren't we done being disappointed by Siri? 
 
 ---
 
