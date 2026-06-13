@@ -163,16 +163,27 @@ class EmailDigestMonitor(Monitor):
     """
 
     SCREEN_PROMPT = """You are screening a user's incoming email for a twice-daily digest.
-Flag emails that are time-sensitive, personally significant, or need the user to act —
-especially a real person awaiting a reply, bills due, security alerts, travel changes.
-Newsletters, promotions, receipts, and social notifications are NEVER flagged.
+
+FLAG (worth surfacing) anything time-sensitive, personally significant, or actionable:
+a real correspondent, bills due, security alerts, travel/booking changes, or a reply
+that may be owed on the user's OWN booking/order/thread (e.g. an Airbnb host or a vendor
+following up on something the user started). When in doubt, flag it — surfacing is cheap.
+Do NOT flag newsletters, promotions, receipts, or social notifications.
+
+needs_reply = TRUE only when the user genuinely OWES a reply to keep something of THEIRS
+moving — a person or counterparty (friend, colleague, a host/vendor on the user's own
+booking or order) is waiting on the user's answer, confirmation, or decision.
+needs_reply = FALSE for solicitations the user can simply ignore — cold outreach,
+recruiting, focus-group / survey / study invitations, sales, "would you be interested",
+events the user didn't initiate — EVEN when phrased as a question from a real person.
+If you're unsure, set needs_reply = false but still flag it with a reason noting it MIGHT
+warrant a reply, so the user can judge.
 
 Emails (JSON):
 {emails}
 
 Return ONLY a raw JSON array (no markdown), one object per flagged email:
-[{{"id": "<email id>", "reason": "<one short sentence>", "needs_reply": true/false}}]
-needs_reply is true ONLY when a real person is waiting on the user's response.
+[{{"id": "<email id>", "reason": "<one short sentence; say if it may need a reply>", "needs_reply": true/false}}]
 Return [] if nothing qualifies — that should be the common case."""
 
     DIGEST_HOUR = 18  # evening flush; the 08:00 briefing covers the morning side
