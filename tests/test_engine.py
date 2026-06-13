@@ -218,6 +218,48 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         self.assertEqual(add.call_args.kwargs['kind'], 'reply_owed')
         self.assertIn('Rohan', add.call_args.kwargs['who'])
 
+    def test_reply_owed_reconcile_open_thread(self):
+        """A thread re-owes a reply only after the prior one was answered."""
+        import skills.commitment_manager as cm
+
+        def service_one_email(subject, sender):
+            s = MagicMock()
+            s.users.return_value.messages.return_value.list.return_value \
+                .execute.return_value = {'messages': [{'id': 'e1'}]}
+            s.users.return_value.messages.return_value.get.return_value \
+                .execute.return_value = {'payload': {'headers': [
+                    {'name': 'Subject', 'value': subject},
+                    {'name': 'From', 'value': sender}]}, 'snippet': '...'}
+            return s
+
+        flagged = '[{"id":"e1","reason":"awaiting reply","needs_reply":true}]'
+        llm = MagicMock(); llm.invoke.return_value = MagicMock(content=flagged)
+        mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 6, 13, 12, 0))
+
+        existing = {'id': 7, 'description': 'Reply to Diane: Project X', 'created_at': '2026-06-11 09:00:00'}
+
+        # Case A: prior reply-owed still UNanswered → no new commitment
+        with patch('skills.email_manager.get_gmail_service',
+                   return_value=service_one_email('Re: Project X', 'Diane <d@x.com>')), \
+             patch.object(engine, '_get_llm', return_value=llm), \
+             patch('email_backend.using_app_password', return_value=False), \
+             patch.object(cm, 'open_reply_owed_for', return_value=existing), \
+             patch('skills.email_manager.user_has_replied', return_value=False), \
+             patch.object(cm, 'add') as add_a, patch.object(cm, 'complete') as comp_a:
+            mon.check({})
+        add_a.assert_not_called(); comp_a.assert_not_called()
+
+        # Case B: user already replied to the prior one → close it, open the new one
+        with patch('skills.email_manager.get_gmail_service',
+                   return_value=service_one_email('Re: Project X', 'Diane <d@x.com>')), \
+             patch.object(engine, '_get_llm', return_value=llm), \
+             patch('email_backend.using_app_password', return_value=False), \
+             patch.object(cm, 'open_reply_owed_for', return_value=existing), \
+             patch('skills.email_manager.user_has_replied', return_value=True), \
+             patch.object(cm, 'add', return_value=20) as add_b, patch.object(cm, 'complete') as comp_b:
+            mon.check({})
+        comp_b.assert_called_once_with(7); add_b.assert_called_once()
+
     def test_bulk_mail_skipped_before_llm(self):
         """A List-Unsubscribe email must be dropped without an LLM call."""
         service = MagicMock()

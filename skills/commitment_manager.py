@@ -123,10 +123,11 @@ def _normalize_subject(s):
     return s.strip()
 
 
-def has_open_reply_owed(who, subject):
-    """Is there already an open reply_owed to this person on this (normalized) subject?
-    Dedupes email-thread follow-ups so 'Project X' and 'Re: Project X' don't both spawn
-    a commitment (the #13/#16 bug)."""
+def open_reply_owed_for(who, subject):
+    """The open reply_owed for this person + thread (normalized subject), or None.
+    NOT for blind dedup — a thread legitimately re-owes a reply each time the other
+    person writes back. The digest uses this to decide whether the prior obligation was
+    already satisfied (you replied) before opening a new one for a fresh inbound."""
     target = _normalize_subject(subject)
     who_l = (who or '').lower()
     for c in get_open_commitments():
@@ -134,8 +135,12 @@ def has_open_reply_owed(who, subject):
             continue
         existing_subject = c['description'].split(': ', 1)[-1]  # after "Reply to X:"
         if _normalize_subject(existing_subject) == target:
-            return True
-    return False
+            return c
+    return None
+
+
+def has_open_reply_owed(who, subject):
+    return open_reply_owed_for(who, subject) is not None
 
 
 def get_upcoming_commitments(days=7, today=None):
@@ -257,7 +262,7 @@ def resolve_replied(reply_checker):
         if c['kind'] != 'reply_owed':
             continue
         subject = c['description'].split(': ', 1)[-1]
-        since = (c.get('created_at') or '')[:10] or None
+        since = c.get('created_at') or None  # full timestamp → epoch-precise reply check
         try:
             if reply_checker(subject, since):
                 complete(c['id'])

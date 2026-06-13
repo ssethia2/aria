@@ -255,15 +255,27 @@ Return [] if nothing qualifies — that should be the common case."""
                      "reason": item.get('reason', '')}
             if item.get('needs_reply') and email['id'] not in converted:
                 sender_name = email['sender'].split('<')[0].strip(' "') or email['sender']
-                # Don't spawn a second reply-owed for the same thread (Project X / Re: Project X).
-                if commitment_manager.has_open_reply_owed(sender_name, email['subject']):
-                    entry["tracked"] = "(already tracking this thread)"
-                else:
+                # A thread RE-OWES a reply each time they write back. So: if there's an
+                # open reply-owed for this thread, only treat this inbound as new if the
+                # user already replied to the prior one (then close it). If they haven't
+                # replied yet, it's the same outstanding reply — don't double-track.
+                existing = commitment_manager.open_reply_owed_for(sender_name, email['subject'])
+                create = True
+                if existing:
+                    from skills.email_manager import user_has_replied
+                    prior_subject = existing['description'].split(': ', 1)[-1]
+                    if user_has_replied(prior_subject, existing.get('created_at')):
+                        commitment_manager.complete(existing['id'])  # prior reply done; this is fresh
+                    else:
+                        create = False
+                if create:
                     due = (self.now_fn() + timedelta(days=2)).strftime('%Y-%m-%d')
                     cid = commitment_manager.add(
                         description=f"Reply to {sender_name}: {email['subject']}",
                         kind='reply_owed', who=sender_name, due_date=due, source='email')
                     entry["tracked"] = f"#{cid}"
+                else:
+                    entry["tracked"] = "(you already owe a reply on this thread)"
                 converted.append(email['id'])
             state.setdefault("pending_digest", []).append(entry)
         state["reply_commitment_ids"] = converted[-300:]

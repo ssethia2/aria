@@ -283,10 +283,11 @@ def draft_email_reply(search_query: str, body: str) -> str:
             f"for review. Nothing was sent.")
 
 
-def user_has_replied(subject, since_date=None):
-    """Gmail-API only: did the user SEND mail on this subject's thread (optionally since
-    since_date YYYY-MM-DD)? Used to auto-resolve reply_owed commitments. Returns False on
-    the IMAP/app-password path (no easy sent-thread search) or if Gmail is unavailable."""
+def user_has_replied(subject, since=None):
+    """Gmail-API only: did the user SEND mail on this subject's thread AFTER `since`?
+    `since` is a 'YYYY-MM-DD HH:MM:SS' (or 'YYYY-MM-DD') string — converted to an epoch
+    for second-precision, so a reply to an EARLIER message doesn't falsely resolve a
+    still-unanswered LATER message on the same thread. False on IMAP / no Gmail."""
     import email_backend
     if email_backend.using_app_password():
         return False
@@ -297,8 +298,18 @@ def user_has_replied(subject, since_date=None):
     if not core:
         return False
     query = f'in:sent subject:"{core}"'
-    if since_date:
-        query += f' after:{since_date.replace("-", "/")}'
+    if since:
+        from datetime import datetime as _dt
+        dt = None
+        try:
+            dt = _dt.strptime(since.strip(), '%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            try:
+                dt = _dt.strptime(since.strip()[:10], '%Y-%m-%d')
+            except ValueError:
+                dt = None
+        if dt:
+            query += f' after:{int(dt.timestamp())}'
     try:
         res = service.users().messages().list(userId='me', q=query, maxResults=1).execute()
         return bool(res.get('messages'))
