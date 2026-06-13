@@ -107,6 +107,35 @@ class TestStore(TempDBMixin, unittest.TestCase):
         self.assertIn("2026-06-15", msg)
         self.assertEqual(cm.get_open_commitments()[0]['due_date'], "2026-06-15")
 
+    def test_recurring_excluded_from_due_and_never_overdue(self):
+        cm.add("HubSpot check-in", due_date="2026-06-01", recurring="weekly")  # stored date is past
+        cm.add("one-off", due_date="2026-06-01")
+        due = [c['description'] for c in cm.get_due_commitments(today="2026-06-13")]
+        self.assertIn("one-off", due)
+        self.assertNotIn("HubSpot check-in", due)             # recurring not in due/overdue
+        rec = [c for c in cm.get_open_commitments() if c['recurring']][0]
+        line = cm.format_line(rec, today="2026-06-13")
+        self.assertNotIn("OVERDUE", line)
+        self.assertIn("repeats weekly", line)
+        self.assertIn("next 2026-06", line)                   # shows a future occurrence
+
+    def test_has_open_reply_owed_dedupes_thread(self):
+        cm.add("Reply to Diane: Project X", kind="reply_owed", who="Diane", due_date="2026-06-13")
+        self.assertTrue(cm.has_open_reply_owed("Diane", "Re: Project X"))      # Re: variant
+        self.assertTrue(cm.has_open_reply_owed("diane", "project x"))          # case-insensitive
+        self.assertFalse(cm.has_open_reply_owed("Diane", "Different topic"))
+        self.assertFalse(cm.has_open_reply_owed("Bob", "Project X"))           # different person
+
+    def test_resolve_replied_completes_answered_threads(self):
+        a = cm.add("Reply to Diane: Project X", kind="reply_owed", who="Diane", due_date="2026-06-13")
+        cm.add("Reply to Bob: Lunch?", kind="reply_owed", who="Bob", due_date="2026-06-13")
+        # checker says the user replied only to the Diane thread
+        resolved = cm.resolve_replied(lambda subj, since: "Project X" in subj)
+        self.assertEqual(resolved, ["Reply to Diane: Project X"])
+        open_descs = [c['description'] for c in cm.get_open_commitments()]
+        self.assertNotIn("Reply to Diane: Project X", open_descs)
+        self.assertIn("Reply to Bob: Lunch?", open_descs)
+
     def test_drop_removes_from_open(self):
         cid = cm.add("never mind")
         self.assertTrue(cm.drop(cid))

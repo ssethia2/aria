@@ -20,11 +20,12 @@ from notify import send_telegram
 load_dotenv()
 
 
-def deliver(markdown_content: str) -> list:
-    """Send the briefing via Telegram and email. Returns the channels that worked."""
+def deliver(telegram_md: str, email_md: str) -> list:
+    """Telegram gets the lean briefing (no news); email gets the full one with the news
+    brief. Returns the channels that worked."""
     delivered = []
 
-    # Weather leads the morning (best-effort — never blocks the briefing).
+    # Weather leads the morning Telegram note (best-effort — never blocks).
     weather = ""
     try:
         from skills.weather_manager import fetch_weather_lines
@@ -34,7 +35,7 @@ def deliver(markdown_content: str) -> list:
     except Exception as e:
         print(f"Weather for briefing failed: {e}")
 
-    if send_telegram(f"☀️ Good morning! {weather}Here's your daily briefing:\n\n{markdown_content}"):
+    if send_telegram(f"☀️ Good morning! {weather}Here's your day:\n\n{telegram_md}"):
         delivered.append("telegram")
 
     try:
@@ -42,7 +43,7 @@ def deliver(markdown_content: str) -> list:
         if service:
             profile = service.users().getProfile(userId='me').execute()
             user_email = profile['emailAddress']
-            if send_email(service, user_email, "Your Daily Assistant Summary ☀️", markdown_content):
+            if send_email(service, user_email, "Your Daily Assistant Summary ☀️", email_md):
                 delivered.append("email")
     except Exception as e:
         print(f"Email delivery failed: {e}")
@@ -72,10 +73,14 @@ def main():
         send_telegram("☀️ Morning check-in: no new emails, news, or reminders today.")
         return
 
-    report_path, markdown_content = generate_daily_markdown(
+    # Two renders: full (with news) for email, lean (no news) for Telegram — the news
+    # brief is long and belongs in email, not the phone glance.
+    report_path, email_md = generate_daily_markdown(
         classifications, raw_emails, news_briefing, reminders)
+    _, telegram_md = generate_daily_markdown(
+        classifications, raw_emails, None, reminders)
 
-    delivered = deliver(markdown_content)
+    delivered = deliver(telegram_md, email_md)
     if not delivered:
         raise RuntimeError(
             "briefing was generated but could not be delivered on any channel "

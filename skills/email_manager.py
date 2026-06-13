@@ -283,6 +283,30 @@ def draft_email_reply(search_query: str, body: str) -> str:
             f"for review. Nothing was sent.")
 
 
+def user_has_replied(subject, since_date=None):
+    """Gmail-API only: did the user SEND mail on this subject's thread (optionally since
+    since_date YYYY-MM-DD)? Used to auto-resolve reply_owed commitments. Returns False on
+    the IMAP/app-password path (no easy sent-thread search) or if Gmail is unavailable."""
+    import email_backend
+    if email_backend.using_app_password():
+        return False
+    service = get_gmail_service()
+    if not service:
+        return False
+    core = subject.split(': ', 1)[-1].strip()
+    if not core:
+        return False
+    query = f'in:sent subject:"{core}"'
+    if since_date:
+        query += f' after:{since_date.replace("-", "/")}'
+    try:
+        res = service.users().messages().list(userId='me', q=query, maxResults=1).execute()
+        return bool(res.get('messages'))
+    except Exception as e:
+        print(f"user_has_replied check failed: {e}")
+        return False
+
+
 def run_email_summary():
     """Fetches and triages recent emails (Gmail API, or IMAP in app-password mode)."""
     print("Running Pilot Skill: Email Summary...")

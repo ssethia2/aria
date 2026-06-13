@@ -104,14 +104,38 @@ def get_open_commitments():
 
 
 def get_due_commitments(today=None):
-    """Open commitments due today or overdue (date-granular)."""
+    """Open NON-recurring commitments due today or overdue. Recurring reminders are
+    excluded — they fire as pings on their own schedule and are never 'overdue'."""
     today = today or datetime.now().strftime('%Y-%m-%d')
     conn = _conn()
     rows = conn.execute(
-        f"{_SELECT} WHERE status = 'open' AND due_date IS NOT NULL AND due_date <= ? "
-        "ORDER BY due_date ASC", (today,)).fetchall()
+        f"{_SELECT} WHERE status = 'open' AND recurring IS NULL "
+        "AND due_date IS NOT NULL AND due_date <= ? ORDER BY due_date ASC", (today,)).fetchall()
     conn.close()
     return _rows_to_dicts(rows)
+
+
+def _normalize_subject(s):
+    """Lowercase and strip stacked Re:/Fwd: prefixes for thread matching."""
+    s = (s or '').lower().strip()
+    while re.match(r'^(re|fwd|fw)\s*:\s*', s):
+        s = re.sub(r'^(re|fwd|fw)\s*:\s*', '', s)
+    return s.strip()
+
+
+def has_open_reply_owed(who, subject):
+    """Is there already an open reply_owed to this person on this (normalized) subject?
+    Dedupes email-thread follow-ups so 'Project X' and 'Re: Project X' don't both spawn
+    a commitment (the #13/#16 bug)."""
+    target = _normalize_subject(subject)
+    who_l = (who or '').lower()
+    for c in get_open_commitments():
+        if c['kind'] != 'reply_owed' or (c['who'] or '').lower() != who_l:
+            continue
+        existing_subject = c['description'].split(': ', 1)[-1]  # after "Reply to X:"
+        if _normalize_subject(existing_subject) == target:
+            return True
+    return False
 
 
 def get_upcoming_commitments(days=7, today=None):
@@ -222,6 +246,27 @@ def get_pingable_now(now=None):
     return out
 
 
+def resolve_replied(reply_checker):
+    """Auto-close reply_owed commitments the user has actually answered. `reply_checker`
+    is injected (email_manager.user_has_replied) to avoid a skill→skill import cycle;
+    it takes (subject, since_date) and returns True if the user replied. Uses each
+    commitment's created_at as the 'since' (so we only count replies sent after it was
+    tracked). Returns the descriptions of the ones resolved."""
+    resolved = []
+    for c in get_open_commitments():
+        if c['kind'] != 'reply_owed':
+            continue
+        subject = c['description'].split(': ', 1)[-1]
+        since = (c.get('created_at') or '')[:10] or None
+        try:
+            if reply_checker(subject, since):
+                complete(c['id'])
+                resolved.append(c['description'])
+        except Exception as e:
+            print(f"[reply-resolve] check failed for #{c['id']}: {e}")
+    return resolved
+
+
 def complete(commitment_id):
     """Mark done. Recurring commitments roll to their next occurrence instead of closing."""
     conn = _conn()
@@ -265,9 +310,16 @@ def format_line(c, today=None):
     if c['who'] and c['who'] not in c['description']:
         parts.append(f"({c['who']})")
     if c['due_date']:
-        when = c['due_date'] + (f" {c['due_time']}" if c['due_time'] else "")
-        marker = " ⚠️ OVERDUE" if c['due_date'] < today else ""
-        parts.append(f"— due {when}{marker}")
+        if c.get('recurring'):
+            # Recurring items are never "overdue" — show the next future occurrence.
+            nxt, guard = c['due_date'], 0
+            while nxt < today and guard < 500:
+                nxt, guard = _next_date(nxt, c['recurring']), guard + 1
+            parts.append(f"— repeats {c['recurring'].replace('_', ' ')} (next {nxt})")
+        else:
+            when = c['due_date'] + (f" {c['due_time']}" if c['due_time'] else "")
+            marker = " ⚠️ OVERDUE" if c['due_date'] < today else ""
+            parts.append(f"— due {when}{marker}")
     return " ".join(parts)
 
 

@@ -255,12 +255,16 @@ Return [] if nothing qualifies — that should be the common case."""
                      "reason": item.get('reason', '')}
             if item.get('needs_reply') and email['id'] not in converted:
                 sender_name = email['sender'].split('<')[0].strip(' "') or email['sender']
-                due = (self.now_fn() + timedelta(days=2)).strftime('%Y-%m-%d')
-                cid = commitment_manager.add(
-                    description=f"Reply to {sender_name}: {email['subject']}",
-                    kind='reply_owed', who=sender_name, due_date=due, source='email')
+                # Don't spawn a second reply-owed for the same thread (Project X / Re: Project X).
+                if commitment_manager.has_open_reply_owed(sender_name, email['subject']):
+                    entry["tracked"] = "(already tracking this thread)"
+                else:
+                    due = (self.now_fn() + timedelta(days=2)).strftime('%Y-%m-%d')
+                    cid = commitment_manager.add(
+                        description=f"Reply to {sender_name}: {email['subject']}",
+                        kind='reply_owed', who=sender_name, due_date=due, source='email')
+                    entry["tracked"] = f"#{cid}"
                 converted.append(email['id'])
-                entry["tracked"] = f"#{cid}"
             state.setdefault("pending_digest", []).append(entry)
         state["reply_commitment_ids"] = converted[-300:]
 
@@ -355,6 +359,24 @@ Return ONLY raw JSON (no markdown):
         state["nudged"] = nudged
         state["nudge_sent_date"] = today
         return [Notification(verdict["message"])]
+
+
+class ReplyResolveMonitor(Monitor):
+    """Auto-close reply-owed commitments the user has actually answered. A few times a
+    day it checks each open reply_owed against sent mail and completes the ones replied
+    to — so a thread you've handled stops nagging (the #13 case). Gmail-API only."""
+
+    def __init__(self, interval_seconds=14400):  # every 4h
+        super().__init__(name="reply-resolve", interval_seconds=interval_seconds)
+
+    def check(self, state: dict) -> list:
+        from skills.commitment_manager import resolve_replied
+        from skills.email_manager import user_has_replied
+        resolved = resolve_replied(user_has_replied)
+        if not resolved:
+            return []
+        return [Notification("✅ Looks like you've replied to: "
+                             + "; ".join(resolved) + " — marked done.")]
 
 
 class HeartbeatMonitor(Monitor):
@@ -611,8 +633,8 @@ class ProactiveEngine:
 def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
     return ProactiveEngine(
         monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(),
-                  InsightMonitor(), NetflixMonitor(), HealthMonitor(),
-                  HeartbeatMonitor()],
+                  InsightMonitor(), ReplyResolveMonitor(), NetflixMonitor(),
+                  HealthMonitor(), HeartbeatMonitor()],
         notify_fn=notify_fn,
     )
 
