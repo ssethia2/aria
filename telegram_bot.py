@@ -162,6 +162,55 @@ def send_voice_note(chat_id, ogg_path, caption=None):
         return False
 
 
+_QUICK_PROMPT = """You are Aria's fast front-line responder. Answer the user's message
+DIRECTLY and concisely ONLY if it's a general-knowledge, factual, definitional, how-to,
+calculation, or explanation question you can answer well from your own training knowledge.
+
+Output EXACTLY the token ESCALATE (nothing else) if answering it would need ANY of:
+the user's personal data / memory / people, their email / calendar / notes / commitments /
+grocery list, real-time or current information (weather, news, prices, today's schedule),
+the web, a specific link, or any action/tool. When in doubt, ESCALATE.
+
+Recent conversation (for context, may be empty):
+{context}
+
+User: {text}"""
+
+
+def quick_answer(agent, chat_id, text):
+    """Fast path: a lightweight model answers a pure general-knowledge question instantly,
+    skipping the full agent's tool machinery. Returns the answer, or None to escalate to
+    the full agent. Pluggable — runs on the light tier (Haiku now; a local model later)."""
+    cfg = thread_config(f"telegram-{chat_id}")
+    try:
+        recent = agent.get_state(cfg).values.get("messages", [])[-6:]
+        context = "\n".join(
+            f"{m.type}: {extract_text(m.content)[:300]}"
+            for m in recent if getattr(m, 'content', None))
+    except Exception:
+        context = ""
+
+    from llm_router import get_llm
+    try:
+        resp = get_llm(tier="light").invoke(
+            _QUICK_PROMPT.format(context=context or "(none)", text=text))
+        ans = extract_text(resp.content).strip()
+    except Exception as e:
+        print(f"[quick] failed, escalating: {e}")
+        return None
+
+    if not ans or ans.upper().startswith("ESCALATE"):
+        return None
+    # Record the turn so the checkpointed conversation stays consistent for follow-ups.
+    try:
+        agent.update_state(cfg, {"messages": [HumanMessage(content=text),
+                                              AIMessage(content=ans)]})
+    except Exception as e:
+        print(f"[quick] couldn't persist turn: {e}")
+    print(f"[quick] answered without the full agent")
+    return ans
+
+
 def run_agent_streaming(agent, chat_id, text) -> str:
     """Run the agent, sending a brief progress note as each new tool family is used,
     and return the final reply. Streaming the LangGraph steps means the user sees
@@ -319,7 +368,11 @@ def main():
             try:
                 # Pulse keeps "typing…" alive; streaming sends brief progress notes.
                 with TypingPulse(chat_id):
-                    reply = run_agent_streaming(agent, chat_id, text)
+                    # Fast path first: a quick general-knowledge answer skips the full
+                    # agent. None means "needs tools/data/current info" → full agent.
+                    reply = quick_answer(agent, chat_id, text)
+                    if reply is None:
+                        reply = run_agent_streaming(agent, chat_id, text)
             except Exception as e:
                 reply = f"Sorry, something went wrong: {e}"
                 print(f"[agent error] {e}")
