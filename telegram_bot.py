@@ -177,6 +177,41 @@ Recent conversation (for context, may be empty):
 User: {text}"""
 
 
+def repair_thread(agent, chat_id) -> int:
+    """Neutralize dangling tool calls (a tool_use with no saved tool_result) in a chat's
+    thread. These happen when the process is killed mid-turn (e.g. a restart between the
+    model requesting a tool and the result being saved), and would otherwise 400 every
+    future message in that thread. Replaces each dangling AI message (by id) with a plain
+    text one. Returns how many were repaired."""
+    cfg = thread_config(f"telegram-{chat_id}")
+    try:
+        msgs = agent.get_state(cfg).values.get("messages", [])
+    except Exception:
+        return 0
+    from langchain_core.messages import ToolMessage
+    repairs = []
+    for i, m in enumerate(msgs):
+        tcs = getattr(m, 'tool_calls', None) or []
+        if not tcs:
+            continue
+        satisfied = set()
+        for nxt in msgs[i + 1:]:
+            if isinstance(nxt, ToolMessage):
+                satisfied.add(nxt.tool_call_id)
+            else:
+                break
+        if any(tc['id'] not in satisfied for tc in tcs):
+            text = m.content if isinstance(m.content, str) else ""
+            repairs.append(AIMessage(id=m.id, content=text or "(a tool action here was interrupted)"))
+    if repairs:
+        try:
+            agent.update_state(cfg, {"messages": repairs})
+        except Exception as e:
+            print(f"[repair] failed for {chat_id}: {e}")
+            return 0
+    return len(repairs)
+
+
 def quick_answer(agent, chat_id, text):
     """Fast path: a lightweight model answers a pure general-knowledge question instantly,
     skipping the full agent's tool machinery. Returns the answer, or None to escalate to
@@ -301,6 +336,13 @@ def main():
     except Exception as e:
         print(f"[startup] health check failed to run: {e}")
 
+    # Defensive: repair any thread left with a dangling tool call by a mid-turn restart,
+    # so the user's first message after a deploy doesn't 400.
+    for chat_id in allowed:
+        n = repair_thread(agent, chat_id)
+        if n:
+            print(f"[startup] repaired {n} dangling tool-call(s) in chat {chat_id}")
+
     offset = None
     print("🎙️  Aria is live on Telegram. Press Ctrl+C to stop.")
 
@@ -374,8 +416,20 @@ def main():
                     if reply is None:
                         reply = run_agent_streaming(agent, chat_id, text)
             except Exception as e:
-                reply = f"Sorry, something went wrong: {e}"
-                print(f"[agent error] {e}")
+                # A thread corrupted by a mid-turn interruption 400s on tool_use/result —
+                # repair it and retry once, rather than surfacing a scary error.
+                if "tool_use" in str(e) and "tool_result" in str(e):
+                    n = repair_thread(agent, chat_id)
+                    print(f"[bot] repaired {n} dangling tool-call(s), retrying")
+                    try:
+                        with TypingPulse(chat_id):
+                            reply = run_agent_streaming(agent, chat_id, text)
+                    except Exception as e2:
+                        reply = f"Sorry, something went wrong: {e2}"
+                        print(f"[agent error after repair] {e2}")
+                else:
+                    reply = f"Sorry, something went wrong: {e}"
+                    print(f"[agent error] {e}")
 
             # Reply in kind: spoken question gets a spoken answer (text rides along).
             delivered = False

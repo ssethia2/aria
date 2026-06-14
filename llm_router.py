@@ -109,6 +109,47 @@ def _build_chain(specs, alert=True):
     return anchor.with_fallbacks(fallbacks) if fallbacks else anchor
 
 
+_whisper_model = None
+
+
+def _get_whisper():
+    """Lazy-load the local Whisper model (ARIA_WHISPER_MODEL: 'base' default, 'tiny' for
+    slower CPUs). Downloads once, then cached."""
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        size = os.getenv("ARIA_WHISPER_MODEL", "base")
+        _whisper_model = WhisperModel(size, device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+    """Transcribe a voice recording. Local Whisper first (no quota, offline, private);
+    Gemini multimodal as fallback. Lives here so provider access stays centralized."""
+    import io
+    try:
+        segments, _info = _get_whisper().transcribe(io.BytesIO(audio_bytes))
+        text = " ".join(s.text.strip() for s in segments).strip()
+        if text:
+            return text
+        print("[stt] local whisper heard nothing; trying Gemini")
+    except Exception as e:
+        print(f"[stt] local whisper failed ({e}); falling back to Gemini")
+
+    from google import genai
+    from google.genai import types
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                "You are a speech-to-text engine. Output the verbatim transcript of "
+                "the audio and NOTHING else — no preamble, no commentary, no quotes."),
+            temperature=0),
+        contents=[types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)])
+    return (response.text or "").strip()
+
+
 def get_llm(temperature=0, tier="standard"):
     """Return a tiered ChatModel with built-in fallbacks. See module docstring for tiers."""
     specs = TIERS.get(tier, TIERS["standard"])
