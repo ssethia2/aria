@@ -32,11 +32,11 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
-from notify import send_telegram
+from core.notify import send_telegram
 
 load_dotenv()
 
-STATE_PATH = os.path.join(os.path.dirname(__file__), "engine_state.json")
+STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine_state.json")
 
 _llm = None
 
@@ -45,7 +45,7 @@ def _get_llm():
     """Lazy, cached router LLM — light tier: screening runs every 15 min, cost matters."""
     global _llm
     if _llm is None:
-        from llm_router import get_llm
+        from core.llm_router import get_llm
         _llm = get_llm(temperature=0, tier="light")
     return _llm
 
@@ -92,7 +92,7 @@ def _record_to_memory(text: str):
     her proactive side did and will deny it when asked — the split-brain problem.
     """
     try:
-        import memory
+        from core import memory
         stamp = datetime.now().strftime('%Y-%m-%d %H:%M')
         line = f"{memory.ACTION_LOG_PREFIX}, {stamp}] " + " ".join(text.split())
         with open(memory.SCRATCHPAD_PATH, "a") as f:
@@ -197,7 +197,7 @@ Return [] if nothing qualifies — that should be the common case."""
         return self._maybe_flush_digest(state)
 
     def _screen_new_mail(self, state: dict):
-        import email_backend
+        from integrations import email_backend
         from skills.email_manager import get_gmail_service
 
         now_ts = time.time()
@@ -234,7 +234,7 @@ Return [] if nothing qualifies — that should be the common case."""
             return
 
         # Deterministic pre-filter: drop bulk mail before spending an LLM call on it.
-        from email_filter import is_bulk
+        from integrations.email_filter import is_bulk
         emails = [e for e in new if not is_bulk(e)]
         dropped = len(new) - len(emails)
         if dropped:
@@ -414,7 +414,7 @@ class HeartbeatMonitor(Monitor):
         super().__init__(name="heartbeat", interval_seconds=interval_seconds)
 
     def check(self, state: dict) -> list:
-        from heartbeat import configured, send_heartbeat
+        from ops.heartbeat import configured, send_heartbeat
         if not configured():
             return []
         # Cheap local liveness signal — avoid the full networked healthcheck every
@@ -434,7 +434,7 @@ class HealthMonitor(Monitor):
         super().__init__(name="health", interval_seconds=interval_seconds)
 
     def check(self, state: dict) -> list:
-        from healthcheck import run_all, summary, FAIL
+        from ops.healthcheck import run_all, summary, FAIL
 
         results = run_all()
         fails = sorted(name for name, s, _ in results if s == FAIL)
@@ -523,7 +523,7 @@ Return ONLY JSON (no markdown):
             return []
 
         recent = state.get("recent", [])
-        from llm_router import get_llm
+        from core.llm_router import get_llm
         prompt = self.PROMPT.format(
             recent="\n".join(f"- {r}" for r in recent) or "(nothing yet)",
             when=now.strftime('%A %-I%p'), context=context)

@@ -27,7 +27,7 @@ import requests
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent_core import build_agent, open_checkpointer, thread_config, extract_text
+from core.agent_core import build_agent, open_checkpointer, thread_config, extract_text
 
 # Brief, non-spammy "what I'm doing" notes by tool family (user asked for light
 # progress updates during long tasks — not Claude-level detail).
@@ -225,7 +225,7 @@ def quick_answer(agent, chat_id, text):
     except Exception:
         context = ""
 
-    from llm_router import get_llm
+    from core.llm_router import get_llm
     try:
         resp = get_llm(tier="light").invoke(
             _QUICK_PROMPT.format(context=context or "(none)", text=text))
@@ -281,7 +281,7 @@ def transcribe_voice_message(file_id: str) -> str:
     file_path = info["result"]["file_path"]
     audio = requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{file_path}",
                          timeout=60).content
-    from llm_router import transcribe_audio
+    from core.llm_router import transcribe_audio
     return transcribe_audio(audio, mime_type="audio/ogg")
 
 
@@ -308,9 +308,9 @@ def main():
     # thread, so the agent's history matches what the user actually saw.
     if allowed and not os.getenv("ARIA_ENGINE_DISABLED"):
         from langchain_core.messages import AIMessage
-        from engine import start_engine_thread
+        from core.engine import start_engine_thread
 
-        from notify import send_telegram as telegram_broadcast
+        from core.notify import send_telegram as telegram_broadcast
 
         def engine_notify(text: str) -> bool:
             ok = telegram_broadcast(text)
@@ -327,11 +327,11 @@ def main():
     # Startup self-check: log status, and telegram the user if anything is broken
     # on boot (a restart into a broken state should be loud, not silent).
     try:
-        from healthcheck import run_all, summary, worst, FAIL
+        from ops.healthcheck import run_all, summary, worst, FAIL
         results = run_all()
         print(summary(results))
         if worst(results) == FAIL and allowed:
-            from notify import send_telegram
+            from core.notify import send_telegram
             send_telegram("⚠️ I just (re)started and something's wrong:\n\n" + summary(results))
     except Exception as e:
         print(f"[startup] health check failed to run: {e}")

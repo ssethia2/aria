@@ -5,8 +5,8 @@ wipes the scratchpad, then checks the Tier 3 consolidation threshold. See docs/a
 """
 import os
 import uuid
-from memory import SCRATCHPAD_PATH, collection, embeddings
-from llm_router import get_llm
+from core.memory import SCRATCHPAD_PATH, collection, embeddings
+from core.llm_router import get_llm
 from dynamic_consolidation import consolidate_long_term_memory
 from langchain_core.messages import HumanMessage, SystemMessage
 

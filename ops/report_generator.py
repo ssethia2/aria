@@ -6,7 +6,7 @@ writes reports/daily_summary_<date>.md and returns (path, markdown_string).
 import os
 from datetime import datetime
 
-REPORT_DIR = os.path.join(os.path.dirname(__file__), "reports")
+REPORT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reports")
 
 def generate_daily_markdown(classifications, emails_data, news_briefing=None, reminders=None):
     """Takes LLM classifications, raw email data, news, and reminders to build a central markdown report."""

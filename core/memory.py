@@ -15,9 +15,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-PROFILE_PATH = os.path.join(os.path.dirname(__file__), "profile.json")
-DB_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
-SCRATCHPAD_PATH = os.path.join(os.path.dirname(__file__), "daily_scratchpad.txt")
+PROFILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "profile.json")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "chroma_db")
+SCRATCHPAD_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "daily_scratchpad.txt")
 
 # --- Layer 1: Core Identity (Static Profile) ---
 
@@ -114,7 +114,7 @@ def read_cold_storage(filename: str) -> str:
     """Use this tool to read a long-term memory archive file from cold storage when directed to by a pointer vector.
     Provide the exact filename (e.g., 'memory_archive_20260317_120000.txt').
     """
-    cold_storage_dir = os.path.join(os.path.dirname(__file__), "cold_storage")
+    cold_storage_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cold_storage")
     filepath = os.path.join(cold_storage_dir, filename)
     
     if not os.path.exists(filepath):

@@ -7,8 +7,8 @@ pointer vector behind. Invoked from nightly_compaction.py. See docs/adr/0002.
 import os
 import uuid
 import datetime
-from memory import DB_PATH, collection, embeddings
-from llm_router import get_llm
+from core.memory import DB_PATH, collection, embeddings
+from core.llm_router import get_llm
 from langchain_core.messages import HumanMessage, SystemMessage
 
 COLD_STORAGE_DIR = os.path.join(os.path.dirname(__file__), "cold_storage")

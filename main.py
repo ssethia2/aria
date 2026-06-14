@@ -10,12 +10,12 @@ import traceback
 
 from dotenv import load_dotenv
 
-from report_generator import generate_daily_markdown
+from ops.report_generator import generate_daily_markdown
 from skills.email_manager import run_email_summary, get_gmail_service, send_email
 from skills.news_manager import generate_news_brief
 from skills.commitment_manager import (get_due_commitments, get_upcoming_commitments,
                                        format_line)
-from notify import send_telegram
+from core.notify import send_telegram
 
 load_dotenv()
 

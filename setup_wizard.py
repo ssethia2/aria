@@ -77,7 +77,7 @@ def main():
 
     print("Running the health check to show what's left:\n" + "-" * 50)
     try:
-        from healthcheck import run_all, summary
+        from ops.healthcheck import run_all, summary
         print(summary(run_all()))
     except Exception as e:
         print(f"(health check skipped: {e})")

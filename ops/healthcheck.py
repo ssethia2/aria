@@ -24,7 +24,7 @@ load_dotenv()
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 _EMOJI = {OK: "✅", WARN: "⚠️", FAIL: "❌"}
-BASE = os.path.dirname(__file__)
+BASE = os.path.dirname(os.path.dirname(__file__))
 
 
 def _p(*parts):
@@ -52,7 +52,7 @@ def check_secrets():
 
 
 def check_email():
-    import email_backend
+    from integrations import email_backend
     if email_backend.using_app_password():
         ok, detail = email_backend.check_login()
         return (OK if ok else FAIL), detail
@@ -67,7 +67,7 @@ def check_email():
 
 
 def check_memory():
-    import memory
+    from core import memory
     if memory.collection is None:
         return WARN, "ChromaDB uninitialized — semantic memory disabled"
     return OK, f"semantic memory OK ({memory.collection.count()} vectors)"
@@ -110,7 +110,7 @@ def check_briefing_today():
 
 
 def check_heartbeat():
-    import heartbeat
+    from ops import heartbeat
     if heartbeat.configured():
         return OK, "external dead-man's-switch active"
     return WARN, "no HEARTBEAT_URL — a host crash won't alert you (see README → Reliability)"

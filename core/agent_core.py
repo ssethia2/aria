@@ -25,10 +25,10 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt, ModelRequest
 from langgraph.checkpoint.sqlite import SqliteSaver
 
-from llm_router import get_llm
-from memory import add_memory, search_memory, read_cold_storage, load_profile
+from core.llm_router import get_llm
+from core.memory import add_memory, search_memory, read_cold_storage, load_profile
 from skills.email_manager import run_email_summary, draft_email_reply, update_memory
-from people import remember_person, get_person, list_people
+from core.people import remember_person, get_person, list_people
 from skills.weather_manager import get_weather
 from skills.research_manager import web_search, fetch_webpage
 from skills.notes_manager import create_note, append_to_note, search_notes, read_note
@@ -39,7 +39,7 @@ from skills.browser_manager import browse_and_report
 from skills.home_assistant import list_lights, control_light
 from skills.spotify_manager import (play_music, playback_control, now_playing,
                                     create_playlist)
-from healthcheck import run_all as _health_run_all, summary as _health_summary
+from ops.healthcheck import run_all as _health_run_all, summary as _health_summary
 from langchain_core.tools import tool as _tool
 
 
@@ -55,10 +55,10 @@ from skills.commitment_manager import (add_commitment, list_commitments,
 from skills.google_calendar import (create_calendar_event, get_calendar_events,
                                     list_my_calendars, configure_shared_calendar,
                                     update_calendar_event, delete_calendar_event)
-from instructions import (render_for_prompt, add_standing_instruction,
+from core.instructions import (render_for_prompt, add_standing_instruction,
                           update_standing_instruction, remove_standing_instruction)
 
-CHECKPOINT_DB_PATH = os.path.join(os.path.dirname(__file__), "aria_checkpoints.db")
+CHECKPOINT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "aria_checkpoints.db")
 
 
 @tool

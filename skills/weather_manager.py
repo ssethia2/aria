@@ -7,7 +7,7 @@ location. Powers the get_weather tool and the morning briefing's lead line.
 import requests
 from langchain_core.tools import tool
 
-from memory import load_profile
+from core.memory import load_profile
 
 # WMO weather interpretation codes -> plain words
 _WMO = {

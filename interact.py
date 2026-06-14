@@ -11,7 +11,7 @@ import uuid
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 
-from agent_core import build_agent, open_checkpointer, thread_config, extract_text
+from core.agent_core import build_agent, open_checkpointer, thread_config, extract_text
 
 load_dotenv()
 

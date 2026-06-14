@@ -9,8 +9,8 @@ import unittest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-import engine
-from engine import (Monitor, Notification, ProactiveEngine, CommitmentMonitor,
+from core import engine
+from core.engine import (Monitor, Notification, ProactiveEngine, CommitmentMonitor,
                     EmailDigestMonitor, ChaseMonitor, InsightMonitor, NetflixMonitor)
 
 
@@ -62,7 +62,7 @@ class TestActionMemory(TempStateMixin, unittest.TestCase):
     """Engine notifications must land in the working-memory scratchpad (no split brain)."""
 
     def test_notification_recorded_to_scratchpad(self):
-        import memory
+        from core import memory
         with tempfile.NamedTemporaryFile(mode='r', suffix='.txt', delete=False) as tmp:
             scratch_path = tmp.name
         try:
@@ -80,7 +80,7 @@ class TestActionMemory(TempStateMixin, unittest.TestCase):
 
     def test_quiet_hours_still_record_action(self):
         """The ping queues at night, but the memory record happens immediately."""
-        import memory
+        from core import memory
         with tempfile.NamedTemporaryFile(mode='r', suffix='.txt', delete=False) as tmp:
             scratch_path = tmp.name
         try:
@@ -242,7 +242,7 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         with patch('skills.email_manager.get_gmail_service',
                    return_value=service_one_email('Re: Project X', 'Diane <d@x.com>')), \
              patch.object(engine, '_get_llm', return_value=llm), \
-             patch('email_backend.using_app_password', return_value=False), \
+             patch('integrations.email_backend.using_app_password', return_value=False), \
              patch.object(cm, 'open_reply_owed_for', return_value=existing), \
              patch('skills.email_manager.user_has_replied', return_value=False), \
              patch.object(cm, 'add') as add_a, patch.object(cm, 'complete') as comp_a:
@@ -253,7 +253,7 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         with patch('skills.email_manager.get_gmail_service',
                    return_value=service_one_email('Re: Project X', 'Diane <d@x.com>')), \
              patch.object(engine, '_get_llm', return_value=llm), \
-             patch('email_backend.using_app_password', return_value=False), \
+             patch('integrations.email_backend.using_app_password', return_value=False), \
              patch.object(cm, 'open_reply_owed_for', return_value=existing), \
              patch('skills.email_manager.user_has_replied', return_value=True), \
              patch.object(cm, 'add', return_value=20) as add_b, patch.object(cm, 'complete') as comp_b:
@@ -276,7 +276,7 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         llm = MagicMock()
         with patch('skills.email_manager.get_gmail_service', return_value=service), \
              patch.object(engine, '_get_llm', return_value=llm), \
-             patch('email_backend.using_app_password', return_value=False):
+             patch('integrations.email_backend.using_app_password', return_value=False):
             mon.check({})
         llm.invoke.assert_not_called()             # bulk mail never reached the LLM
 
@@ -353,7 +353,7 @@ class TestHealthMonitor(TempStateMixin, unittest.TestCase):
     def test_alerts_on_fail_then_dedups(self):
         results = [('gmail', 'FAIL', 'token expired'), ('disk', 'OK', 'fine')]
         mon = engine.HealthMonitor()
-        with patch('healthcheck.run_all', return_value=results):
+        with patch('ops.healthcheck.run_all', return_value=results):
             first = mon.check({})
             state = {}
             a = mon.check(state)
@@ -364,7 +364,7 @@ class TestHealthMonitor(TempStateMixin, unittest.TestCase):
         self.assertEqual(b, [])          # same failure same day → silent
 
     def test_silent_when_all_ok(self):
-        with patch('healthcheck.run_all', return_value=[('x', 'OK', 'fine')]):
+        with patch('ops.healthcheck.run_all', return_value=[('x', 'OK', 'fine')]):
             self.assertEqual(engine.HealthMonitor().check({}), [])
 
 
@@ -381,13 +381,13 @@ class TestInsightMonitor(TempStateMixin, unittest.TestCase):
 
     def test_silent_at_night(self):
         m = InsightMonitor(now_fn=lambda: datetime(2026, 6, 12, 23, 0))
-        with patch('llm_router.get_llm') as g:
+        with patch('core.llm_router.get_llm') as g:
             self.assertEqual(m.check({}), [])
         g.assert_not_called()
 
     def test_one_insight_per_halfday(self):
         m = self._mon(hour=11)
-        with patch('llm_router.get_llm',
+        with patch('core.llm_router.get_llm',
                    return_value=self._llm('{"send": true, "insight": "Free morning — clear the Priya reply."}')):
             state = {}
             first = m.check(state)
@@ -398,20 +398,20 @@ class TestInsightMonitor(TempStateMixin, unittest.TestCase):
 
     def test_silence_verdict_sends_nothing(self):
         m = self._mon()
-        with patch('llm_router.get_llm',
+        with patch('core.llm_router.get_llm',
                    return_value=self._llm('{"send": false, "insight": ""}')):
             self.assertEqual(m.check({}), [])
 
     def test_empty_context_skips_without_llm(self):
         m = InsightMonitor(now_fn=lambda: datetime(2026, 6, 12, 11, 0))
         m._gather = lambda: ""
-        with patch('llm_router.get_llm') as g:
+        with patch('core.llm_router.get_llm') as g:
             self.assertEqual(m.check({}), [])
         g.assert_not_called()
 
     def test_recent_insights_tracked_for_dedup(self):
         m = self._mon()
-        with patch('llm_router.get_llm',
+        with patch('core.llm_router.get_llm',
                    return_value=self._llm('{"send": true, "insight": "Rain at 3 — move your run earlier."}')):
             state = {}
             m.check(state)

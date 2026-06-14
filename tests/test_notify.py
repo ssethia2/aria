@@ -5,7 +5,7 @@ Run: python3 -m unittest discover tests
 import unittest
 from unittest.mock import MagicMock, patch
 
-import notify
+from core import notify
 
 
 class TestSendTelegram(unittest.TestCase):

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import instructions as ins
+from core import instructions as ins
 
 
 class TempRegistryMixin:

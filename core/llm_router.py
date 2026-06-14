@@ -27,7 +27,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv()
 
-ALERT_STATE_PATH = os.path.join(os.path.dirname(__file__), "router_alerts.json")
+ALERT_STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "router_alerts.json")
 
 
 # --- model factories (Opus 4.8 rejects sampling params, so it ignores temperature) ---
@@ -72,7 +72,7 @@ def _notify_fallback_once(model_name: str, error: str):
             json.dump(state, f, indent=2)
     except Exception as e:
         print(f"[router] couldn't persist alert state: {e}")
-    from notify import send_telegram
+    from core.notify import send_telegram
     send_telegram(
         f"⚠️ Heads up: my model '{model_name}' is failing and I've switched to a fallback.\n\n"
         f"Error: {error}\n\n"

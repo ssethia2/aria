@@ -21,7 +21,7 @@ import re
 
 from langchain_core.tools import tool
 
-from llm_router import get_llm
+from core.llm_router import get_llm
 
 MAX_STEPS = 14
 MAX_PAGE_CHARS = 3000

@@ -18,7 +18,7 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-INSTRUCTIONS_PATH = os.path.join(os.path.dirname(__file__), "instructions.json")
+INSTRUCTIONS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "instructions.json")
 
 
 def _load() -> list:

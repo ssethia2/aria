@@ -19,7 +19,7 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-PEOPLE_PATH = os.path.join(os.path.dirname(__file__), "people.json")
+PEOPLE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "people.json")
 
 
 def _load() -> list:

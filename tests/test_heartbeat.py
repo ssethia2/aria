@@ -5,7 +5,7 @@ Run: python3 -m unittest discover tests
 import unittest
 from unittest.mock import MagicMock, patch
 
-import heartbeat
+from ops import heartbeat
 
 
 class TestHeartbeat(unittest.TestCase):
@@ -36,19 +36,19 @@ class TestHeartbeat(unittest.TestCase):
 
 class TestHeartbeatMonitor(unittest.TestCase):
     def test_pings_when_configured_and_sends_no_notification(self):
-        import engine
+        from core import engine
         mon = engine.HeartbeatMonitor()
-        with patch('heartbeat.configured', return_value=True), \
-             patch('heartbeat.send_heartbeat', return_value=True) as ping:
+        with patch('ops.heartbeat.configured', return_value=True), \
+             patch('ops.heartbeat.send_heartbeat', return_value=True) as ping:
             out = mon.check({})
         ping.assert_called_once()
         self.assertEqual(out, [])
 
     def test_skips_when_unconfigured(self):
-        import engine
+        from core import engine
         mon = engine.HeartbeatMonitor()
-        with patch('heartbeat.configured', return_value=False), \
-             patch('heartbeat.send_heartbeat') as ping:
+        with patch('ops.heartbeat.configured', return_value=False), \
+             patch('ops.heartbeat.send_heartbeat') as ping:
             mon.check({})
         ping.assert_not_called()
 

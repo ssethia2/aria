@@ -117,7 +117,7 @@ def generate_news_brief():
         return None
         
     print("Synthesizing news with AI Router (Opus -> Sonnet -> Gemini)... (This may take a moment)")
-    from llm_router import get_llm
+    from core.llm_router import get_llm
     try:
         llm = get_llm(temperature=0)
     except Exception as e:

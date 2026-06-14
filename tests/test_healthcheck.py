@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-import healthcheck as hc
+from ops import healthcheck as hc
 
 
 class TestStatusLogic(unittest.TestCase):

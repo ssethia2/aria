@@ -24,14 +24,14 @@ class TestQuickAnswer(unittest.TestCase):
 
     def test_general_question_answered_directly(self):
         agent = _agent_with_history()
-        with patch('llm_router.get_llm', return_value=self._llm("Lisbon.")):
+        with patch('core.llm_router.get_llm', return_value=self._llm("Lisbon.")):
             ans = tb.quick_answer(agent, "c1", "what's the capital of Portugal?")
         self.assertEqual(ans, "Lisbon.")
         agent.update_state.assert_called_once()      # turn persisted for context
 
     def test_escalates_for_tool_or_personal(self):
         agent = _agent_with_history()
-        with patch('llm_router.get_llm', return_value=self._llm("ESCALATE")):
+        with patch('core.llm_router.get_llm', return_value=self._llm("ESCALATE")):
             ans = tb.quick_answer(agent, "c1", "what's on my calendar tomorrow?")
         self.assertIsNone(ans)                        # → full agent
         agent.update_state.assert_not_called()
@@ -39,12 +39,12 @@ class TestQuickAnswer(unittest.TestCase):
     def test_escalates_on_llm_error(self):
         agent = _agent_with_history()
         llm = MagicMock(); llm.invoke.side_effect = Exception("down")
-        with patch('llm_router.get_llm', return_value=llm):
+        with patch('core.llm_router.get_llm', return_value=llm):
             self.assertIsNone(tb.quick_answer(agent, "c1", "anything"))
 
     def test_empty_response_escalates(self):
         agent = _agent_with_history()
-        with patch('llm_router.get_llm', return_value=self._llm("   ")):
+        with patch('core.llm_router.get_llm', return_value=self._llm("   ")):
             self.assertIsNone(tb.quick_answer(agent, "c1", "x"))
 
 

@@ -8,7 +8,7 @@ import unittest
 from datetime import datetime
 from unittest.mock import patch
 
-import people
+from core import people
 
 
 class TempPeopleMixin:

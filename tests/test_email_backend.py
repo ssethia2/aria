@@ -5,7 +5,7 @@ Run: python3 -m unittest discover tests
 import unittest
 from unittest.mock import MagicMock, patch
 
-import email_backend as eb
+from integrations import email_backend as eb
 
 
 class TestModeSelection(unittest.TestCase):

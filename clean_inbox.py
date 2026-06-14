@@ -17,7 +17,7 @@ from langchain_core.prompts import PromptTemplate
 # Ensure local imports work correctly
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from skills.email_manager import get_gmail_service, get_or_create_label, apply_label_to_email
-from memory import load_profile
+from core.memory import load_profile
 
 # Load environment variables
 load_dotenv()

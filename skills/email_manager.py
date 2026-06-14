@@ -120,7 +120,7 @@ def get_gmail_service():
         return None
 def fetch_recent_emails(service, max_results=10):
     """Fetch the latest emails from INBOX (via IMAP if app-password mode, else Gmail API)."""
-    import email_backend
+    from integrations import email_backend
     if email_backend.using_app_password():
         print(f"Fetching last {max_results} emails via IMAP...")
         return email_backend.imap_fetch_recent(max_results)
@@ -180,7 +180,7 @@ def apply_label_to_email(service, email_id, label_id):
     service.users().messages().modify(userId='me', id=email_id, body=body).execute()
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from memory import load_profile, update_profile
+from core.memory import load_profile, update_profile
 from langchain_core.tools import tool
 @tool
 def update_memory(key: str, value: str) -> str:
@@ -197,7 +197,7 @@ def send_email(service, to_email, subject, body_text):
         print(f"❌ SECURITY BLOCK: Cannot send email to {to_email}. Not in GCS allowlist.")
         return None
 
-    import email_backend
+    from integrations import email_backend
     if email_backend.using_app_password():
         print(f"Sending email to {to_email} via SMTP...")
         try:
@@ -235,7 +235,7 @@ def draft_email_reply(search_query: str, body: str) -> str:
             (e.g. 'from:rohan trip plans', 'subject:"apartment listings"').
         body: The reply text, written in the user's voice — concise, no signature.
     """
-    import email_backend
+    from integrations import email_backend
     if email_backend.using_app_password():
         # IMAP mode: search the inbox loosely and draft against the best match.
         matches = [e for e in email_backend.imap_fetch_recent(30)
@@ -288,7 +288,7 @@ def user_has_replied(subject, since=None):
     `since` is a 'YYYY-MM-DD HH:MM:SS' (or 'YYYY-MM-DD') string — converted to an epoch
     for second-precision, so a reply to an EARLIER message doesn't falsely resolve a
     still-unanswered LATER message on the same thread. False on IMAP / no Gmail."""
-    import email_backend
+    from integrations import email_backend
     if email_backend.using_app_password():
         return False
     service = get_gmail_service()
@@ -321,7 +321,7 @@ def user_has_replied(subject, since=None):
 def run_email_summary():
     """Fetches and triages recent emails (Gmail API, or IMAP in app-password mode)."""
     print("Running Pilot Skill: Email Summary...")
-    import email_backend
+    from integrations import email_backend
     app_pw = email_backend.using_app_password()
     service = get_gmail_service()
     if not service and not app_pw:
@@ -333,7 +333,7 @@ def run_email_summary():
         return [], []
     # Same deterministic pre-filter as the engine digest: don't pay the LLM to
     # re-classify bulk mail (newsletters/marketing) — it's deterministically "cleaned up".
-    from email_filter import is_bulk
+    from integrations.email_filter import is_bulk
     bulk = [e for e in emails if is_bulk(e)]
     emails = [e for e in emails if not is_bulk(e)]
     if bulk:
@@ -342,7 +342,7 @@ def run_email_summary():
         return [], []
     # Get the LLM from our unified router
     print("Initializing LLM Router...")
-    from llm_router import get_llm
+    from core.llm_router import get_llm
     try:
         llm = get_llm(temperature=0)
     except Exception as e:

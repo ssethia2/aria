@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import report_generator
+from ops import report_generator
 
 
 SAMPLE_EMAILS = [

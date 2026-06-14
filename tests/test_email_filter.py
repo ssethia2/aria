@@ -4,7 +4,7 @@ Run: python3 -m unittest discover tests
 """
 import unittest
 
-from email_filter import is_bulk
+from integrations.email_filter import is_bulk
 
 
 class TestIsBulk(unittest.TestCase):
