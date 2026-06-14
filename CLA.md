@@ -1,4 +1,4 @@
-# Aria Individual Contributor License Agreement (v1.0)
+# Aria Individual Contributor License Agreement (v1.1)
 
 Thank you for contributing to **Aria** (the "Project"), maintained by **Satvik Sethia**
 (the "Maintainer", "we", "us"). This Contributor License Agreement ("Agreement")
@@ -6,14 +6,15 @@ clarifies the intellectual-property rights granted with Contributions from any p
 or entity. It protects You as a contributor as well as the Maintainer and Aria's users;
 it does **not** change your right to use your own Contributions for any other purpose.
 
-By submitting a Contribution to the Project (for example, by opening a pull request),
-You accept and agree to the terms of this Agreement for Your present and future
-Contributions. If a checkbox or signature step is requested at submission time, completing
-it records Your acceptance.
+**You accept this Agreement by signing it through the Project's CLA process.** When You open
+a pull request, an automated CLA check will require You to record Your acceptance — by
+posting the confirmation it requests, or otherwise completing the signature step described
+in [CONTRIBUTING.md](CONTRIBUTING.md) — **before Your Contribution can be merged**. Your
+acceptance then applies to that and all future Contributions You submit, each governed by
+the version of this Agreement in effect when that Contribution is made (see Section 10).
 
 > **Note:** This template is provided for convenience and is **not legal advice**. The
-> Maintainer should have it reviewed by qualified counsel before relying on it, and fill
-> in the governing-law section below.
+> Maintainer should have it reviewed by qualified counsel before relying on it.
 
 ## 1. Definitions
 
@@ -81,11 +82,19 @@ You represent that:
     employer has waived such rights for Your Contributions to the Project, or that Your
     employer has executed a separate corporate CLA with the Maintainer.
 
+> **Important — check your employer agreement before signing.** Many employment and
+> contractor IP-assignment agreements cover work that *relates to the employer's business*,
+> even when done on personal time and equipment. Confirm that Yours does not reach Your
+> Contributions to this Project. This applies to the Maintainer as a contributor too.
+
 (b) Each of Your Contributions is Your original creation. Where Your Contribution includes
     work that is not Your original creation, You have identified the source and any license
     or other restriction (including related patents and trademarks) of which You are
     personally aware, and such material is licensed under terms compatible with this
-    Agreement and the Project's outbound licenses.
+    Agreement and the Project's outbound licenses. If any portion of a Contribution was
+    produced with the assistance of an AI tool, You represent that You are entitled to
+    contribute it under this Agreement and that, to Your knowledge, it does not incorporate
+    third-party material inconsistently with these representations.
 
 (c) You are not aware of any third-party claims, licenses, or restrictions that conflict
     with the rights granted under this Agreement.
@@ -112,22 +121,48 @@ To the fullest extent permitted under applicable law, You waive, and agree not t
 against the Maintainer or its licensees, any moral rights You may have in Your
 Contributions.
 
-## 9. Governing Law
+## 9. Governing Law and Venue
 
 This Agreement is governed by the laws of **the Commonwealth of Massachusetts, USA**,
-without regard to its conflict-of-laws provisions. This is the entire agreement between the parties regarding Contributions and
-supersedes any prior agreement on the subject.
+without regard to its conflict-of-laws provisions. The parties consent to the exclusive
+jurisdiction and venue of the state and federal courts located in the Commonwealth of
+Massachusetts for any dispute arising out of or relating to this Agreement.
+
+## 10. Acceptance, Versioning, and Miscellaneous
+
+**Acceptance.** You accept this Agreement by completing the signature step in the Project's
+CLA process. Electronic acceptance — including confirming through the automated CLA check or
+a signed record stored in the repository — is valid and has the same legal effect as a
+handwritten signature.
+
+**Versioning.** The Maintainer may publish revised versions of this Agreement. Each of Your
+Contributions is governed by the version in effect at the time that Contribution is
+submitted; a later version does not retroactively change the terms that applied to
+Contributions You already made. If a revised version materially changes Your obligations,
+the Maintainer may require You to accept the new version before merging further
+Contributions.
+
+**Severability.** If any provision of this Agreement is held unenforceable, that provision
+will be enforced to the maximum extent permissible and the remaining provisions will remain
+in full force and effect.
+
+**Entire agreement.** This Agreement is the entire agreement between the parties regarding
+Contributions and supersedes any prior agreement or understanding on the subject.
 
 ---
 
 ## How to sign
 
-Contributing on your own behalf (individual): by submitting a pull request you agree to
-this Agreement; when prompted by the CLA check, confirm acceptance (or add your name to
-the signers list as described in [CONTRIBUTING.md](CONTRIBUTING.md)).
+**Individuals:** When You open a pull request, the automated CLA check will ask You to
+record Your acceptance by posting the confirmation phrase it provides. **Merging is blocked
+until that signature is recorded** — this is required for every contributor, on the version
+of this Agreement then in effect.
 
-Contributing on behalf of an organization: contact the Maintainer for a **Corporate CLA**
-before submitting.
+**Organizations:** If You are contributing on behalf of an employer or organization, contact
+the Maintainer for a **Corporate CLA** before submitting.
+
+The CLA check records Your GitHub identity and the time of acceptance; the fields below
+mirror that record and need not be filled in manually unless requested.
 
 | Field | Value |
 |-------|-------|
