@@ -15,13 +15,16 @@ your key). Shares the 'local-voice-live' conversation thread with the brain.
 """
 import os
 import sys
+import time
 import queue
 import asyncio
 import threading
+import traceback
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors
 from langchain_core.messages import HumanMessage
 
 from agent_core import build_agent, open_checkpointer, thread_config, extract_text
@@ -84,6 +87,9 @@ async def main():
     # --- speaker: a thread draining a queue so barge-in can flush it instantly ---
     play_q: queue.Queue = queue.Queue()
     stop = threading.Event()
+    duplex = "--duplex" in sys.argv      # headphones: full barge-in, no echo gating
+    HANGOVER = 0.6                        # keep mic muted this long after she stops talking
+    state = {"last_audio": 0.0}           # monotonic time of the last audio chunk *played*
 
     def player():
         with sd.RawOutputStream(samplerate=OUT_RATE, channels=1, dtype="int16") as out:
@@ -94,8 +100,10 @@ async def main():
                     continue
                 if chunk:
                     out.write(chunk)
+                    state["last_audio"] = time.monotonic()
 
-    threading.Thread(target=player, daemon=True).start()
+    player_thread = threading.Thread(target=player, daemon=True)
+    player_thread.start()
 
     def flush_playback():
         try:
@@ -122,7 +130,11 @@ async def main():
               "(e.g. gemini-2.0-flash-live-001).")
         return
 
-    print("🎙️  Live voice. Talk naturally — interrupt her any time. Ctrl-C to quit.")
+    print("🎙️  Live voice. "
+          + ("Headphones/duplex — interrupt any time. " if duplex
+             else "Speaker mode — mic mutes while she talks (no echo). "
+                  "Headphones + --duplex for barge-in. ")
+          + "Ctrl-C to quit.")
 
     # --- mic: callback (audio thread) hands bytes to the asyncio loop ---
     in_q: asyncio.Queue = asyncio.Queue()
@@ -137,44 +149,103 @@ async def main():
     async def send_mic():
         while True:
             data = await in_q.get()
-            await session.send_realtime_input(
-                audio=types.Blob(data=data, mime_type=f"audio/pcm;rate={IN_RATE}"))
+            # Echo guard (speaker mode): drop mic audio while Aria is speaking and for a
+            # short hangover after, so her own voice isn't captured and answered. With
+            # --duplex (headphones) we never gate, preserving barge-in.
+            if not duplex and (not play_q.empty()
+                               or time.monotonic() - state["last_audio"] < HANGOVER):
+                continue
+            try:
+                await session.send_realtime_input(
+                    audio=types.Blob(data=data, mime_type=f"audio/pcm;rate={IN_RATE}"))
+            except Exception:
+                print("\n   [mic send failed — session likely closed]")
+                traceback.print_exc()
+                return
+
+    async def _handle(msg):
+        sc = msg.server_content
+        if sc:
+            if sc.interrupted:                       # user barged in
+                flush_playback()
+            if sc.input_transcription and sc.input_transcription.text:
+                print(f"\nYou: {sc.input_transcription.text}")
+            if sc.model_turn:
+                for part in sc.model_turn.parts:
+                    if part.inline_data and part.inline_data.data:
+                        play_q.put(part.inline_data.data)
+            if sc.output_transcription and sc.output_transcription.text:
+                print(sc.output_transcription.text, end="", flush=True)
+            if sc.turn_complete:
+                print()
+        if msg.go_away:                               # server about to disconnect
+            print(f"\n[server ending session: {msg.go_away}]")
+        if msg.tool_call:
+            # Always return a response per call — if run_brain raises and we send
+            # nothing, the model hangs forever waiting for the tool result.
+            responses = []
+            for fc in msg.tool_call.function_calls:
+                req = (fc.args or {}).get("request", "")
+                print(f"\n[→ brain] {req}")
+                try:
+                    answer = await loop.run_in_executor(None, run_brain, agent, req)
+                except Exception:
+                    print("   [brain error]")
+                    traceback.print_exc()
+                    answer = "Sorry, I hit an error reaching my tools."
+                print(f"[brain] {answer[:100]}")
+                responses.append(types.FunctionResponse(
+                    id=fc.id, name=fc.name, response={"result": answer}))
+            if responses:
+                await session.send_tool_response(function_responses=responses)
 
     async def receive():
-        async for msg in session.receive():
-            sc = msg.server_content
-            if sc:
-                if sc.interrupted:                       # user barged in
-                    flush_playback()
-                if sc.input_transcription and sc.input_transcription.text:
-                    print(f"\nYou: {sc.input_transcription.text}")
-                if sc.model_turn:
-                    for part in sc.model_turn.parts:
-                        if part.inline_data and part.inline_data.data:
-                            play_q.put(part.inline_data.data)
-                if sc.output_transcription and sc.output_transcription.text:
-                    print(sc.output_transcription.text, end="", flush=True)
-                if sc.turn_complete:
-                    print()
-            if msg.tool_call:
-                responses = []
-                for fc in msg.tool_call.function_calls:
-                    if fc.name == "escalate_to_aria":
-                        req = (fc.args or {}).get("request", "")
-                        print(f"\n[→ brain] {req}")
-                        answer = await loop.run_in_executor(None, run_brain, agent, req)
-                        print(f"[brain] {answer[:100]}")
-                        responses.append(types.FunctionResponse(
-                            id=fc.id, name=fc.name, response={"result": answer}))
-                if responses:
-                    await session.send_tool_response(function_responses=responses)
+        # session.receive() yields ONE model turn then completes; loop so the
+        # conversation keeps going across turns instead of ending after the first reply.
+        try:
+            while True:
+                got = False
+                async for msg in session.receive():
+                    got = True
+                    try:
+                        await _handle(msg)
+                    except Exception:
+                        print("\n   [message-handling error — continuing]")
+                        traceback.print_exc()
+                if not got:
+                    await asyncio.sleep(0.05)         # avoid a tight spin on empty turns
+        except genai_errors.APIError as e:
+            if getattr(e, "code", None) != 1000:      # 1000 = normal close (Ctrl+C / end)
+                print("\n   [receive stream error]")
+                traceback.print_exc()
+        except Exception:
+            print("\n   [receive stream error]")
+            traceback.print_exc()
+        finally:
+            print("\n[session closed]")
 
     try:
-        await asyncio.gather(send_mic(), receive())
+        # Exit as soon as either side ends (e.g. the session closes) instead of hanging.
+        tasks = [asyncio.create_task(send_mic()), asyncio.create_task(receive())]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for t in tasks:
+            t.cancel()
     finally:
-        mic.stop()
+        # Orderly teardown. Stop the mic first (halts callbacks into the loop), then let
+        # the player thread close its PortAudio stream *in its own thread* before exit.
+        # Without the join the daemon thread is killed mid-PortAudio at interpreter
+        # shutdown, which double-frees → "malloc: pointer being freed was not allocated".
+        try:
+            mic.stop()
+            mic.close()
+        except Exception:
+            pass
         stop.set()
-        await cm.__aexit__(None, None, None)
+        player_thread.join(timeout=2)
+        try:
+            await cm.__aexit__(None, None, None)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
