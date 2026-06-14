@@ -10,7 +10,7 @@ The CLA does two things: you keep ownership of your contribution (you grant a no
 
 **How to agree:**
 1. Read [`CLA.md`](CLA.md).
-2. On your first pull request, confirm acceptance when the CLA check prompts you — or, if the check isn't wired up yet, state in the PR description: *"I have read and agree to the Aria CLA (CLA.md)"* and fill in the signer table from the CLA.
+2. On your first pull request, the automated CLA check will ask you to record acceptance by posting the confirmation phrase it provides. **This is required — merging is blocked until it's recorded.** Your acceptance covers that and future contributions, under the CLA version then in effect.
 3. Contributing on behalf of an employer or organization? Contact the maintainer for a **Corporate CLA** first, or confirm your employer has waived its rights to your contribution.
 
 By submitting a contribution you also affirm it's your original work (see the representations in the CLA).
