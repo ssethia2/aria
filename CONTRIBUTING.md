@@ -1,6 +1,19 @@
 # Contributing to Aria
 
-This guide covers the conventions that keep Aria modular. For architecture and rationale see [`context/implementation_plan.md`](context/implementation_plan.md) and [`docs/adr/`](docs/adr/); for setup see the [README](README.md).
+Contributions are welcome. This guide covers the conventions that keep Aria modular. For architecture and rationale see [`context/implementation_plan.md`](context/implementation_plan.md) and [`docs/adr/`](docs/adr/); for setup see the [README](README.md).
+
+## Licensing & the CLA (read first)
+
+Aria is **dual-licensed**: open source under the [GNU AGPL-3.0](LICENSE) for the community, and available under separate commercial terms for users for whom the AGPL is unsuitable. To keep that dual-licensing path clean, **every contributor must agree to the [Contributor License Agreement (`CLA.md`)](CLA.md)** before their contribution can be merged.
+
+The CLA does two things: you keep ownership of your contribution (you grant a non-exclusive license, you don't assign copyright), and you grant the maintainer the right to offer your contribution under **both** the AGPL and commercial licenses. A bare [DCO](https://developercertificate.org/) sign-off is *not* sufficient on its own, because it doesn't grant that re-licensing right — the CLA is what makes dual-licensing possible.
+
+**How to agree:**
+1. Read [`CLA.md`](CLA.md).
+2. On your first pull request, confirm acceptance when the CLA check prompts you — or, if the check isn't wired up yet, state in the PR description: *"I have read and agree to the Aria CLA (CLA.md)"* and fill in the signer table from the CLA.
+3. Contributing on behalf of an employer or organization? Contact the maintainer for a **Corporate CLA** first, or confirm your employer has waived its rights to your contribution.
+
+By submitting a contribution you also affirm it's your original work (see the representations in the CLA).
 
 ## Project conventions
 
@@ -64,5 +77,10 @@ Run the offline unit tests with `python3 -m unittest discover tests` — they mo
 - Run `python3 interact.py` and confirm the agent selects and calls the tool from a natural-language prompt.
 - For anything in the morning path, run `./run.sh` once and inspect the generated `reports/daily_summary_<date>.md`.
 
-## Commits
-Keep secrets out of git — `.env`, `credentials.json`, `token*.json`, and `profile.json` are gitignored; keep it that way.
+## Commits & pull requests
+Keep secrets out of git — `.env`, `credentials.json`, `token*.json`, `profile.json`, `allow.json`, `.spotify_cache`, and the data stores are gitignored; keep it that way.
+
+Opening a PR:
+- Confirm CLA acceptance (see [Licensing & the CLA](#licensing--the-cla-read-first)) — this is required before merge.
+- Keep each PR to one logical change; run `python3 -m unittest discover tests` and include tests for new behavior.
+- Note any new dependency, OAuth scope, or system-level step, and add an ADR for non-obvious decisions.

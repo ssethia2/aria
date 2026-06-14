@@ -85,7 +85,7 @@ Design rationale and the decision record live in [`docs/`](docs/):
 - **[docs/architecture.md](docs/architecture.md)** — memory, agent core, router, engine, repo map
 - **[docs/setup.md](docs/setup.md)** — full setup & configuration reference
 - **[docs/adr/](docs/adr/)** — architecture decision records (why these choices)
-<!-- - **[CONTRIBUTING.md](CONTRIBUTING.md)** — conventions + the "add a skill" recipe -->
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — conventions, the "add a skill" recipe, and the contributor CLA
 
 Offline test suite: `python3 -m unittest discover tests` (160+ tests, all network/LLM mocked).
 
@@ -111,4 +111,6 @@ For 24/7 operation, host it on a Raspberry Pi or any always-on Linux box — see
 
 Licensed under the **GNU AGPL-3.0** (see [LICENSE](LICENSE)) — you're free to use, study, modify, and self-host it, and any modified version you run as a network service must publish its source.
 
-**Commercial licensing:** the AGPL's source-disclosure terms are unsuitable for closed/commercial products. Aria is **dual-licensed** — for a commercial license that lifts the AGPL obligations, contact the author. © Satvik Sethia. To keep that dual-licensing path clean, external contributions aren't being accepted at this time.
+**Commercial licensing:** the AGPL's source-disclosure terms are unsuitable for closed/commercial products. Aria is **dual-licensed** — for a commercial license that lifts the AGPL obligations, contact the author. © Satvik Sethia.
+
+**Contributing:** contributions are welcome under a [Contributor License Agreement](CLA.md). The CLA lets the author offer your contribution under both the AGPL and commercial licenses (keeping the dual-licensing path clean) while you keep ownership of your work — see [CONTRIBUTING.md](CONTRIBUTING.md).
