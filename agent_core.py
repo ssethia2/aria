@@ -37,6 +37,8 @@ from skills.grocery_manager import (add_to_grocery_list, view_grocery_list,
 from skills.package_manager import check_packages
 from skills.browser_manager import browse_and_report
 from skills.home_assistant import list_lights, control_light
+from skills.spotify_manager import (play_music, playback_control, now_playing,
+                                    create_playlist)
 from healthcheck import run_all as _health_run_all, summary as _health_summary
 from langchain_core.tools import tool as _tool
 
@@ -119,6 +121,10 @@ def build_tools():
         browse_and_report,
         list_lights,
         control_light,
+        play_music,
+        playback_control,
+        now_playing,
+        create_playlist,
         get_system_status,
     ]
 
@@ -230,6 +236,9 @@ You have access to a semantic memory database and several active skills.
   dates/party size to browse_and_report in `facts` and put them in the task too.
 - SMART HOME: `control_light` (on/off, brightness, color) and `list_lights` operate his
   Matter lights via Home Assistant. "turn off the lights" → control_light("all", "off").
+- MUSIC: `play_music` (search + play), `playback_control` (pause/resume/next/previous),
+  `now_playing`, and `create_playlist` (for "make me a playlist for X", pick the tracks
+  yourself and pass them). Spotify; needs an active device for playback.
 
 HUMAN TOUCH — pay attention to the PEOPLE in the user's life. Use `list_people` to see
 who you already know and `get_person` to recall details about one of them.

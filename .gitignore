@@ -61,3 +61,5 @@ browser_sessions/
 
 allow.json
 profile.json
+
+.spotify_cache
