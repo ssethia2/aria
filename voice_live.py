@@ -91,9 +91,10 @@ async def main():
     # Audio runs as ONE duplex stream (mic-in + speaker-out in a single 16 kHz callback).
     # That gives the echo canceller a CONSTANT, aligned mic↔speaker delay — which the old
     # separate-stream + queue design couldn't, so echo leaked and she heard herself.
-    duplex = "--duplex" in sys.argv          # headphones: raw mic, full barge-in, no AEC
-    no_aec = "--no-aec" in sys.argv          # force the half-duplex gate fallback
-    aec_on = not duplex and not no_aec and voice_aec.available()
+    duplex = "--duplex" in sys.argv          # headphones: raw mic, full barge-in
+    # AEC is opt-in: speexdsp's binding lacks the residual-suppression preprocessor, so it
+    # leaks enough echo to self-trigger. Default is the safe half-duplex gate (no self-loop).
+    aec_on = "--aec" in sys.argv and not duplex and voice_aec.available()
     canceller = voice_aec.make_canceller() if aec_on else None
 
     playback = deque(maxlen=4000)            # 16 kHz int16 frames queued for the speaker
@@ -123,9 +124,9 @@ async def main():
               "(e.g. gemini-2.0-flash-live-001).")
         return
 
-    mode = ("Headphones/duplex — interrupt any time." if duplex
-            else "Speaker barge-in (AEC) — talk over her." if aec_on
-            else "Speaker mode — mic mutes while she talks (--duplex for barge-in).")
+    mode = ("Headphones — interrupt her any time." if duplex
+            else "Experimental AEC (speaker barge-in)." if aec_on
+            else "Speaker mode — mic mutes while she talks; headphones + --duplex for barge-in.")
     print(f"🎙️  Live voice. {mode}  Ctrl-C to quit.")
 
     # --- one duplex stream: play a frame and capture a frame in lockstep ---
