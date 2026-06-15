@@ -20,12 +20,16 @@ import queue
 import asyncio
 import threading
 import traceback
+from collections import deque
 
+import numpy as np
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
 from langchain_core.messages import HumanMessage
+
+import voice_aec
 
 from agent_core import build_agent, open_checkpointer, thread_config, extract_text
 
@@ -84,33 +88,23 @@ async def main():
         print(f"Audio backend unavailable: {e}\nIn the venv: pip install sounddevice")
         return
 
-    # --- speaker: a thread draining a queue so barge-in can flush it instantly ---
-    play_q: queue.Queue = queue.Queue()
-    stop = threading.Event()
-    duplex = "--duplex" in sys.argv      # headphones: full barge-in, no echo gating
-    HANGOVER = 0.6                        # keep mic muted this long after she stops talking
-    state = {"last_audio": 0.0}           # monotonic time of the last audio chunk *played*
+    # Audio runs as ONE duplex stream (mic-in + speaker-out in a single 16 kHz callback).
+    # That gives the echo canceller a CONSTANT, aligned mic↔speaker delay — which the old
+    # separate-stream + queue design couldn't, so echo leaked and she heard herself.
+    duplex = "--duplex" in sys.argv          # headphones: raw mic, full barge-in
+    # AEC is opt-in: speexdsp's binding lacks the residual-suppression preprocessor, so it
+    # leaks enough echo to self-trigger. Default is the safe half-duplex gate (no self-loop).
+    aec_on = "--aec" in sys.argv and not duplex and voice_aec.available()
+    canceller = voice_aec.make_canceller() if aec_on else None
 
-    def player():
-        with sd.RawOutputStream(samplerate=OUT_RATE, channels=1, dtype="int16") as out:
-            while not stop.is_set():
-                try:
-                    chunk = play_q.get(timeout=0.1)
-                except queue.Empty:
-                    continue
-                if chunk:
-                    out.write(chunk)
-                    state["last_audio"] = time.monotonic()
-
-    player_thread = threading.Thread(target=player, daemon=True)
-    player_thread.start()
+    playback = deque(maxlen=4000)            # 16 kHz int16 frames queued for the speaker
+    play_rem = {"buf": np.zeros(0, dtype=np.int16)}   # partial frame carried between chunks
+    mic_out_q: asyncio.Queue = asyncio.Queue()        # echo-cleaned mic frames -> Gemini
+    HANGOVER_FRAMES = 60                     # gate fallback: ~600 ms mute after she talks
+    gate = {"hold": 0}
 
     def flush_playback():
-        try:
-            while True:
-                play_q.get_nowait()
-        except queue.Empty:
-            pass
+        playback.clear()                     # interrupt / barge-in: stop speaking immediately
 
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
@@ -130,34 +124,48 @@ async def main():
               "(e.g. gemini-2.0-flash-live-001).")
         return
 
-    print("🎙️  Live voice. "
-          + ("Headphones/duplex — interrupt any time. " if duplex
-             else "Speaker mode — mic mutes while she talks (no echo). "
-                  "Headphones + --duplex for barge-in. ")
-          + "Ctrl-C to quit.")
+    mode = ("Headphones — interrupt her any time." if duplex
+            else "Experimental AEC (speaker barge-in)." if aec_on
+            else "Speaker mode — mic mutes while she talks; headphones + --duplex for barge-in.")
+    print(f"🎙️  Live voice. {mode}  Ctrl-C to quit.")
 
-    # --- mic: callback (audio thread) hands bytes to the asyncio loop ---
-    in_q: asyncio.Queue = asyncio.Queue()
+    # --- one duplex stream: play a frame and capture a frame in lockstep ---
+    SIL = np.zeros(voice_aec.AEC_FRAME, dtype=np.int16)
 
-    def mic_cb(indata, frames, t, status):
-        loop.call_soon_threadsafe(in_q.put_nowait, bytes(indata))
+    def audio_cb(indata, outdata, n, t, status):
+        try:
+            play = playback.popleft()
+            playing = True
+        except IndexError:
+            play, playing = SIL, False
+        outdata[:, 0] = play
+        mic = indata[:, 0].astype(np.int16, copy=True)
+        if aec_on:                                    # subtract her voice using the played ref
+            cleaned = canceller.process(mic.tobytes(), play.tobytes())
+        elif duplex:                                  # headphones: nothing to cancel
+            cleaned = mic.tobytes()
+        else:                                         # half-duplex gate fallback
+            gate["hold"] = HANGOVER_FRAMES if playing else max(0, gate["hold"] - 1)
+            cleaned = None if gate["hold"] > 0 else mic.tobytes()
+        if cleaned is not None:
+            loop.call_soon_threadsafe(mic_out_q.put_nowait, cleaned)
 
-    mic = sd.RawInputStream(samplerate=IN_RATE, channels=1, dtype="int16",
-                            blocksize=CHUNK, callback=mic_cb)
-    mic.start()
+    stream = sd.Stream(samplerate=IN_RATE, blocksize=voice_aec.AEC_FRAME,
+                       channels=1, dtype="int16", callback=audio_cb)
+    stream.start()
 
     async def send_mic():
         while True:
-            data = await in_q.get()
-            # Echo guard (speaker mode): drop mic audio while Aria is speaking and for a
-            # short hangover after, so her own voice isn't captured and answered. With
-            # --duplex (headphones) we never gate, preserving barge-in.
-            if not duplex and (not play_q.empty()
-                               or time.monotonic() - state["last_audio"] < HANGOVER):
-                continue
+            data = await mic_out_q.get()
+            chunks = [data]
+            while len(chunks) < 25:                   # batch ~250 ms of frames per send
+                try:
+                    chunks.append(mic_out_q.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
             try:
-                await session.send_realtime_input(
-                    audio=types.Blob(data=data, mime_type=f"audio/pcm;rate={IN_RATE}"))
+                await session.send_realtime_input(audio=types.Blob(
+                    data=b"".join(chunks), mime_type=f"audio/pcm;rate={IN_RATE}"))
             except Exception:
                 print("\n   [mic send failed — session likely closed]")
                 traceback.print_exc()
@@ -173,7 +181,12 @@ async def main():
             if sc.model_turn:
                 for part in sc.model_turn.parts:
                     if part.inline_data and part.inline_data.data:
-                        play_q.put(part.inline_data.data)
+                        pcm = voice_aec.resample_to_16k(
+                            np.frombuffer(part.inline_data.data, dtype=np.int16), OUT_RATE)
+                        buf = np.concatenate([play_rem["buf"], pcm])
+                        frames_, play_rem["buf"] = voice_aec.chunk_frames(buf)
+                        for f in frames_:
+                            playback.append(f)
             if sc.output_transcription and sc.output_transcription.text:
                 print(sc.output_transcription.text, end="", flush=True)
             if sc.turn_complete:
@@ -231,17 +244,13 @@ async def main():
         for t in tasks:
             t.cancel()
     finally:
-        # Orderly teardown. Stop the mic first (halts callbacks into the loop), then let
-        # the player thread close its PortAudio stream *in its own thread* before exit.
-        # Without the join the daemon thread is killed mid-PortAudio at interpreter
-        # shutdown, which double-frees → "malloc: pointer being freed was not allocated".
+        # Stop the duplex stream cleanly before exit (a stream killed mid-PortAudio at
+        # interpreter shutdown double-frees → "malloc: pointer being freed was not allocated").
         try:
-            mic.stop()
-            mic.close()
+            stream.stop()
+            stream.close()
         except Exception:
             pass
-        stop.set()
-        player_thread.join(timeout=2)
         try:
             await cm.__aexit__(None, None, None)
         except Exception:
