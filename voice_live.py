@@ -20,12 +20,16 @@ import queue
 import asyncio
 import threading
 import traceback
+from collections import deque
 
+import numpy as np
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
 from langchain_core.messages import HumanMessage
+
+import voice_aec
 
 from agent_core import build_agent, open_checkpointer, thread_config, extract_text
 
@@ -87,20 +91,31 @@ async def main():
     # --- speaker: a thread draining a queue so barge-in can flush it instantly ---
     play_q: queue.Queue = queue.Queue()
     stop = threading.Event()
-    duplex = "--duplex" in sys.argv      # headphones: full barge-in, no echo gating
-    HANGOVER = 0.6                        # keep mic muted this long after she stops talking
-    state = {"last_audio": 0.0}           # monotonic time of the last audio chunk *played*
+    duplex = "--duplex" in sys.argv          # headphones: raw mic, full barge-in
+    no_aec = "--no-aec" in sys.argv          # force the half-duplex gate fallback
+    aec_on = not duplex and not no_aec and voice_aec.available()
+    canceller = voice_aec.make_canceller() if aec_on else None
+    render_q = deque(maxlen=200)             # 16 kHz reference frames of what we're playing
+    HANGOVER = 0.6                            # gate fallback: mute mic this long after she talks
+    state = {"last_audio": 0.0}               # monotonic time of the last audio chunk *played*
 
     def player():
+        ref_rem = np.zeros(0, dtype=np.int16)
         with sd.RawOutputStream(samplerate=OUT_RATE, channels=1, dtype="int16") as out:
             while not stop.is_set():
                 try:
                     chunk = play_q.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                if chunk:
-                    out.write(chunk)
-                    state["last_audio"] = time.monotonic()
+                if not chunk:
+                    continue
+                out.write(chunk)
+                state["last_audio"] = time.monotonic()
+                if aec_on:                    # stash a 16 kHz reference of what we just played
+                    ref16 = voice_aec.resample_to_16k(np.frombuffer(chunk, np.int16), OUT_RATE)
+                    frames_, ref_rem = voice_aec.chunk_frames(np.concatenate([ref_rem, ref16]))
+                    for f in frames_:
+                        render_q.append(f.tobytes())
 
     player_thread = threading.Thread(target=player, daemon=True)
     player_thread.start()
@@ -111,6 +126,7 @@ async def main():
                 play_q.get_nowait()
         except queue.Empty:
             pass
+        render_q.clear()                      # drop stale echo references on barge-in
 
     config = types.LiveConnectConfig(
         response_modalities=["AUDIO"],
@@ -130,11 +146,10 @@ async def main():
               "(e.g. gemini-2.0-flash-live-001).")
         return
 
-    print("🎙️  Live voice. "
-          + ("Headphones/duplex — interrupt any time. " if duplex
-             else "Speaker mode — mic mutes while she talks (no echo). "
-                  "Headphones + --duplex for barge-in. ")
-          + "Ctrl-C to quit.")
+    mode = ("Headphones/duplex — interrupt any time." if duplex
+            else "Speaker barge-in (AEC) — talk over her." if aec_on
+            else "Speaker mode — mic mutes while she talks (--duplex for barge-in).")
+    print(f"🎙️  Live voice. {mode}  Ctrl-C to quit.")
 
     # --- mic: callback (audio thread) hands bytes to the asyncio loop ---
     in_q: asyncio.Queue = asyncio.Queue()
@@ -147,17 +162,31 @@ async def main():
     mic.start()
 
     async def send_mic():
+        mic_rem = np.zeros(0, dtype=np.int16)
         while True:
             data = await in_q.get()
-            # Echo guard (speaker mode): drop mic audio while Aria is speaking and for a
-            # short hangover after, so her own voice isn't captured and answered. With
-            # --duplex (headphones) we never gate, preserving barge-in.
-            if not duplex and (not play_q.empty()
-                               or time.monotonic() - state["last_audio"] < HANGOVER):
-                continue
             try:
-                await session.send_realtime_input(
-                    audio=types.Blob(data=data, mime_type=f"audio/pcm;rate={IN_RATE}"))
+                if aec_on:
+                    # Echo-cancel each 10 ms mic frame against the matching played
+                    # reference, then send the cleaned audio. The mic stays open, so you
+                    # can talk over her (barge-in) without her hearing herself.
+                    samples = np.frombuffer(data, dtype=np.int16)
+                    frames_, mic_rem = voice_aec.chunk_frames(np.concatenate([mic_rem, samples]))
+                    cleaned = []
+                    for mf in frames_:
+                        ref = render_q.popleft() if render_q else voice_aec.SILENCE
+                        cleaned.append(canceller.process(mf.tobytes(), ref))
+                    if cleaned:
+                        await session.send_realtime_input(audio=types.Blob(
+                            data=b"".join(cleaned), mime_type=f"audio/pcm;rate={IN_RATE}"))
+                else:
+                    # Gate fallback: drop mic while she's speaking (no barge-in). --duplex
+                    # (headphones) skips the gate entirely.
+                    if not duplex and (not play_q.empty()
+                                       or time.monotonic() - state["last_audio"] < HANGOVER):
+                        continue
+                    await session.send_realtime_input(
+                        audio=types.Blob(data=data, mime_type=f"audio/pcm;rate={IN_RATE}"))
             except Exception:
                 print("\n   [mic send failed — session likely closed]")
                 traceback.print_exc()
