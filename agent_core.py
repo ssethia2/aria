@@ -270,9 +270,13 @@ def build_system_message() -> SystemMessage:
     turns with the tool schemas — the big cost saver) and a tiny VOLATILE block holding
     the live timestamp after the cache breakpoint, so the clock can't bust the cache."""
     now = datetime.now().strftime('%A, %Y-%m-%d %H:%M:%S')
+    # 1h cache TTL (vs the 5-min default) survives the gaps between sparse, bursty
+    # assistant interactions — the dominant cause of cache misses for personal use.
+    # Reads stay ~0.1x; the write premium (2x vs 1.25x) pays off after one re-hit/hour.
+    ttl = os.getenv("ARIA_CACHE_TTL", "1h")
     return SystemMessage(content=[
         {"type": "text", "text": _stable_prompt(),
-         "cache_control": {"type": "ephemeral"}},
+         "cache_control": {"type": "ephemeral", "ttl": ttl}},
         {"type": "text",
          "text": f"The current date and time is: {now}. Use this for any date math "
                  f"(e.g. computing a commitment's date from 'tomorrow' or 'Friday')."},
