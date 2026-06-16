@@ -63,3 +63,7 @@ allow.json
 profile.json
 
 .spotify_cache
+
+# webvoice trial: friend invite tokens
+webvoice/friends.json
+webvoice/usage.json

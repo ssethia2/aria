@@ -1,0 +1,16 @@
+[Unit]
+Description=Aria webvoice HTTPS tunnel (stable public URL for phones)
+After=network-online.target aria-webvoice.service
+Wants=network-online.target
+
+[Service]
+User={{USER}}
+WorkingDirectory={{APP_DIR}}
+ExecStart={{APP_DIR}}/webvoice/deploy/tunnel.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:{{APP_DIR}}/logs/webvoice-tunnel.log
+StandardError=append:{{APP_DIR}}/logs/webvoice-tunnel.err.log
+
+[Install]
+WantedBy=multi-user.target

@@ -8,6 +8,21 @@ It's the same two-layer design as `voice_live.py` — Gemini up front, Claude br
 the escalate handoff — but the front layer runs in the browser, which is what makes it work
 on a phone.
 
+## Letting friends try it (guest mode)
+
+This backend is **multi-user and invite-only**. Each friend gets a link with a token; that
+token maps to an isolated guest: their **own** memory, an **account-free** toolset (memory +
+web + weather — no email/calendar/contacts/etc.), their **own** conversation thread. Friends
+can never see your data or each other's. (You use telegram/`voice_live` for your full Aria.)
+
+```bash
+python3 webvoice/add_friend.py "Alice" https://your-domain.ngrok-free.app
+# → Invite link: https://your-domain.ngrok-free.app/?t=<token>
+```
+Send that link. They open it, tap Start, and talk — Add to Home Screen for an app icon.
+Re-running for the same name reuses their token, so their memory persists. Tokens live in
+`webvoice/friends.json` (gitignored). Opening the site without a valid `?t=` is rejected.
+
 ## What this spike proved
 - **iOS WebKit does clean AEC + barge-in.** Tested on iPhone (Safari/Chrome — both WebKit):
   no self-echo on speaker, you can interrupt her. The thing native desktop Python couldn't do.
