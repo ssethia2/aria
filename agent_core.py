@@ -53,7 +53,8 @@ def get_system_status() -> str:
 from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
-                                       complete_commitment, drop_commitment)
+                                       complete_commitment, drop_commitment,
+                                       analyze_commitments)
 from skills.google_calendar import (create_calendar_event, get_calendar_events,
                                     list_my_calendars, configure_shared_calendar,
                                     update_calendar_event, delete_calendar_event)
@@ -102,6 +103,7 @@ def build_tools(guest=False):
         list_commitments,
         complete_commitment,
         drop_commitment,
+        analyze_commitments,
         create_calendar_event,
         get_calendar_events,
         update_calendar_event,
@@ -167,6 +169,8 @@ feature. If asked for subcommitments or subtasks, track it as ONE commitment and
 NEVER reply that you can't create or track commitments — that is your core capability and is
 always available. (Same rule everywhere: don't deny a capability you have a tool for; if a
 specific variation isn't supported, say what you CAN do instead of refusing outright.)
+Use `analyze_commitments` when the user asks how they're doing, what keeps slipping, or
+for a review — it surfaces patterns over time (what's overdue, who/what it concentrates on).
 
 CALENDAR: for appointments and events with a date (dinners, flights, meetings), use
 `create_calendar_event`. When telling the user what's ON their calendar, or cross-
