@@ -102,12 +102,20 @@ const SYSTEM = "You are Aria, talking with Satvik out loud. Keep replies short, 
   "task, call escalate_to_aria with his request, then speak back what it returns.";
 
 let session = null;
+let invite = "";
 
 async function start() {
   $("start").disabled = true;
   try {
+    invite = new URLSearchParams(location.search).get("t") || "";
     setStatus("getting token…");
-    const { token, model } = await (await fetch("/live-token")).json();
+    const tokRes = await fetch("/live-token?t=" + encodeURIComponent(invite));
+    if (tokRes.status === 403) {
+      setStatus("invalid invite");
+      log("This invite link is invalid or expired — ask for a new one.", "err");
+      $("start").disabled = false; return;
+    }
+    const { token, model } = await tokRes.json();
 
     setStatus("requesting mic…");
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -177,7 +185,7 @@ async function onMessage(msg) {
       try {
         const r = await fetch("/agent", { method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ request: fc.args?.request || "" }) });
+          body: JSON.stringify({ request: fc.args?.request || "", token: invite }) });
         result = (await r.json()).result;
         log("brain: " + result.slice(0, 120));
       } catch (e) { log("brain error: " + e, "err"); }
