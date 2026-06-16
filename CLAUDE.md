@@ -16,6 +16,9 @@ Guidance for Claude Code working in this repo. Aria is a modular personal AI ass
 source venv/bin/activate
 python3 telegram_bot.py # chat from your phone (long-polling; needs TELEGRAM_* in .env)
 python3 interact.py     # local terminal chat
+python3 voice.py        # local voice REPL (on-device Whisper STT + say/piper TTS; --ptt)
+python3 voice_live.py   # realtime Gemini Live voice (barge-in; escalate_to_aria → brain)
+webvoice/run.sh         # browser/phone voice client (Live in-browser) + ngrok tunnel
 ./run.sh                # nightly compaction + morning briefing email (cron entry point)
 python3 clean_inbox.py  # one-shot bulk inbox cleanup
 python3 aria_server.py  # FastAPI webhook server on :8000
@@ -23,7 +26,7 @@ python3 aria_server.py  # FastAPI webhook server on :8000
 Run tests with `python3 -m unittest discover tests` (offline; Gmail/LLM/network mocked). Agent behavior still needs manual verification (see CONTRIBUTING "Testing & verification").
 
 ## Architecture in one breath
-Three interfaces — `telegram_bot.py` (phone, long-polling), `interact.py` (terminal REPL), and `main.py` (08:00 briefing via launchd) — share one agent definition in `agent_core.py` (tools + system prompt). The agent calls skills in `skills/`, all of which get their LLM from `llm_router.get_llm()` (Claude→Gemini fallback) and their Gmail from `email_manager.get_gmail_service()`. Memory is a 3-tier system in `memory.py` + the two compaction scripts. Conversations persist via the SQLite checkpointer (`aria_checkpoints.db`). The bot also hosts `engine.py` — a proactivity thread of polling monitors (reminders, important email, Netflix) with quiet hours, see ADR 0004. **New interfaces and skills build on `agent_core.py`; new monitors subclass `Monitor` in `engine.py`. Don't re-define tools or the system prompt elsewhere.**
+Interfaces — `telegram_bot.py` (phone, long-polling), `interact.py` (terminal REPL), `main.py` (08:00 briefing via launchd), and the voice front-ends (`voice.py` local Whisper REPL, `voice_live.py` realtime Gemini Live, and `webvoice/` a browser/phone client) — all share one agent definition in `agent_core.py` (tools + system prompt). The realtime/voice front-ends keep the conversation snappy and hand real work to that shared brain via the `escalate_to_aria` tool. The agent calls skills in `skills/`, all of which get their LLM from `llm_router.get_llm()` (Claude→Gemini fallback) and their Gmail from `email_manager.get_gmail_service()`. Memory is a 3-tier system in `memory.py` + the two compaction scripts. Conversations persist via the SQLite checkpointer (`aria_checkpoints.db`). The bot also hosts `engine.py` — a proactivity thread of polling monitors (reminders, important email, Netflix) with quiet hours, see ADR 0004. **New interfaces and skills build on `agent_core.py`; new monitors subclass `Monitor` in `engine.py`. Don't re-define tools or the system prompt elsewhere.**
 
 ## Hard rules (don't violate without an ADR)
 - **LLM access only via `llm_router.get_llm()`** — never instantiate a provider SDK in a skill (sole exception: `clean_inbox.py`, by design). See ADR 0001.

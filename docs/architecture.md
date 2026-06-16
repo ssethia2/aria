@@ -4,11 +4,12 @@ How Aria is put together, for anyone reading the code. For *why* specific choice
 
 ## Shape
 
-Three thin **interfaces** share one agent; the agent calls **skills**; a background **engine** runs autonomous monitors; everything gets its model from one **router**.
+Several thin **interfaces** share one agent; the agent calls **skills**; a background **engine** runs autonomous monitors; everything gets its model from one **router**.
 
 | Layer | Files | Role |
 |---|---|---|
-| Interfaces | `telegram_bot.py`, `interact.py`, `main.py` | Phone (text+voice), terminal REPL, scheduled briefing |
+| Interfaces | `telegram_bot.py`, `interact.py`, `main.py` | Phone (text+voice notes), terminal REPL, scheduled briefing |
+| Voice | `voice.py`, `voice_live.py`, `webvoice/` | On-device Whisper REPL; realtime Gemini Live (barge-in); browser/phone client — all hand off to the agent via `escalate_to_aria` |
 | Agent | `agent_core.py` | One definition of tools + system prompt, shared by all interfaces |
 | Skills | `skills/` | Modular capabilities, each exposing LangChain tools |
 | Engine | `engine.py` | Polling monitors that act without being asked |
@@ -77,6 +78,10 @@ Silent failure is the enemy. `healthcheck.py` validates secrets, email auth, mem
 agent_core.py            Shared agent: tools + cached system prompt
 telegram_bot.py          Telegram interface (long-poll; text + voice; progress updates)
 interact.py              Terminal REPL
+voice.py                 Local voice REPL (on-device Whisper STT + say/piper TTS)
+voice_live.py            Realtime Gemini Live voice (barge-in; escalate_to_aria → brain)
+voice_aec.py             Optional speexdsp echo cancellation for voice_live
+webvoice/                Browser/phone voice client (Live in-browser) + FastAPI backend
 main.py / morning_run.py Scheduled briefing (fail-loud delivery)
 llm_router.py            Tiered, fallback-aware model factory
 memory.py                Profile + ChromaDB semantic memory + memory tools

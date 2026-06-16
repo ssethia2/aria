@@ -15,9 +15,9 @@ Aria: 💡 Heads-up: heavy rain Saturday morning, right when you're set to play
       tennis with Dev at 10 — might be worth checking with him about an indoor court.
 ```
 
-### ⚡ Coming very soon
+### 🎙️ Voice
 
-A voice platform that will transform ARIA from yet another chatbot into a true personal assistant. Because let's be real, aren't we done being disappointed by Siri? 
+Because let's be real — aren't we done being disappointed by Siri? You can *talk* to Aria, not just type: an on-device voice mode (local Whisper, fully private), a realtime conversational mode over Gemini Live you can **interrupt mid-sentence** (true barge-in), and a browser/phone client you add to your home screen like a native app. The snappy voice layer hands anything real — memory, email, calendar — to the same brain.
 
 ---
 
@@ -65,10 +65,10 @@ Plus the invisible parts: durable conversations that survive restarts, a self-di
 
 ## 🏗️ How it's built
 
-Three thin interfaces — **Telegram** (phone, text + voice), a **terminal REPL**, and a **scheduled briefing** — all share one agent definition. The agent calls modular **skills**; a background **engine** runs polling monitors. Everything routes its LLM calls through one tiered, fallback-aware router.
+A handful of thin interfaces — **Telegram** (text + voice notes), a **terminal REPL**, a **scheduled briefing**, and **realtime voice** (on-device, Gemini Live, and a browser/phone app) — all share one agent definition. The agent calls modular **skills**; a background **engine** runs polling monitors. Everything routes its LLM calls through one tiered, fallback-aware router.
 
 ```
-  Telegram · REPL · 08:00 briefing
+  Telegram · REPL · briefing · voice (local · live · web)
                 │
           agent_core.py ── tiered LLM router ──▶ Opus / Sonnet / Gemini·Haiku
                 │                                  (per-task, prompt-cached)
