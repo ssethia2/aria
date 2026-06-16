@@ -126,5 +126,60 @@ class TestAllowlistFailSafe(unittest.TestCase):
         self.assertEqual(result, ['satvik@example.com'])
 
 
+def _b64(text):
+    import base64
+    return base64.urlsafe_b64encode(text.encode()).decode()
+
+
+def _gmail_msg(sender, subject, text):
+    return {'payload': {
+        'headers': [{'name': 'From', 'value': sender},
+                    {'name': 'Subject', 'value': subject},
+                    {'name': 'Date', 'value': 'Mon, 1 Jan 2026'}],
+        'mimeType': 'text/plain', 'body': {'data': _b64(text)}}}
+
+
+class TestReadEmailThread(unittest.TestCase):
+    def _service(self, thread_messages):
+        svc = MagicMock()
+        users = svc.users.return_value
+        users.messages.return_value.list.return_value.execute.return_value = {'messages': [{'id': 'm1'}]}
+        users.messages.return_value.get.return_value.execute.return_value = {'threadId': 't1'}
+        users.threads.return_value.get.return_value.execute.return_value = {'messages': thread_messages}
+        return svc
+
+    def test_returns_thread_contents(self):
+        svc = self._service([_gmail_msg('Rohan <r@x.com>', 'Project X', 'We should book flights for July.')])
+        with patch('email_backend.using_app_password', return_value=False), \
+             patch.object(email_manager, 'get_gmail_service', return_value=svc):
+            out = email_manager.read_email_thread.invoke({'search_query': 'project x'})
+        self.assertIn('Rohan', out)
+        self.assertIn('Project X', out)
+        self.assertIn('book flights', out)
+
+    def test_not_found_does_not_claim_no_access(self):
+        svc = MagicMock()
+        svc.users.return_value.messages.return_value.list.return_value.execute.return_value = {'messages': []}
+        with patch('email_backend.using_app_password', return_value=False), \
+             patch.object(email_manager, 'get_gmail_service', return_value=svc):
+            out = email_manager.read_email_thread.invoke({'search_query': 'nope'})
+        self.assertIn('no matching', out.lower())
+        self.assertNotIn("can't access", out.lower())
+
+    def test_no_service(self):
+        with patch('email_backend.using_app_password', return_value=False), \
+             patch.object(email_manager, 'get_gmail_service', return_value=None):
+            out = email_manager.read_email_thread.invoke({'search_query': 'x'})
+        self.assertIn("isn't available", out)
+
+    def test_body_text_prefers_plain_then_strips_html(self):
+        multipart = {'mimeType': 'multipart/alternative', 'body': {}, 'parts': [
+            {'mimeType': 'text/plain', 'body': {'data': _b64('plain body')}},
+            {'mimeType': 'text/html', 'body': {'data': _b64('<p>html body</p>')}}]}
+        self.assertEqual(email_manager._body_text(multipart), 'plain body')
+        html_only = {'mimeType': 'text/html', 'body': {'data': _b64('<b>Hello</b> there')}}
+        self.assertIn('Hello', email_manager._body_text(html_only))
+
+
 if __name__ == '__main__':
     unittest.main()
