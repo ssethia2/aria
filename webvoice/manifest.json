@@ -1,0 +1,9 @@
+{
+  "name": "Aria",
+  "short_name": "Aria",
+  "display": "standalone",
+  "background_color": "#0b0f17",
+  "theme_color": "#0b0f17",
+  "start_url": "/",
+  "icons": [{ "src": "/icon.png", "sizes": "180x180", "type": "image/png" }]
+}
