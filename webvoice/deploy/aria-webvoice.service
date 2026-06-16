@@ -1,0 +1,17 @@
+[Unit]
+Description=Aria webvoice — multi-user guest voice backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{USER}}
+WorkingDirectory={{APP_DIR}}
+# Bind to localhost only — the tunnel service exposes it publicly over HTTPS.
+ExecStart={{APP_DIR}}/venv/bin/uvicorn webvoice.server:app --host 127.0.0.1 --port 8800
+Restart=always
+RestartSec=10
+StandardOutput=append:{{APP_DIR}}/logs/webvoice.log
+StandardError=append:{{APP_DIR}}/logs/webvoice.err.log
+
+[Install]
+WantedBy=multi-user.target
