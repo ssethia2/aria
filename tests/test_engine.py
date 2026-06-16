@@ -446,5 +446,57 @@ class TestNetflixMonitor(TempStateMixin, unittest.TestCase):
             self.assertEqual(mon.check({}), [])
 
 
+class TestReflectionMonitor(unittest.TestCase):
+    def _llm(self, payload):
+        resp = MagicMock(); resp.content = payload
+        llm = MagicMock(); llm.invoke.return_value = resp
+        return patch('llm_router.get_llm', return_value=llm)
+
+    def _evening(self):
+        return datetime(2026, 6, 16, 21, 0)
+
+    def test_proposes_a_standing_rule_in_the_evening(self):
+        from engine import ReflectionMonitor
+        mon = ReflectionMonitor(now_fn=self._evening)
+        with patch.object(ReflectionMonitor, '_todays_memory',
+                          return_value="User: always email the news, don't chat it."), \
+             patch('instructions.render_for_prompt', return_value=""), \
+             self._llm('{"suggestions": ["Always send the news as an email, never a chat."]}'):
+            notes = mon.check({})
+        self.assertEqual(len(notes), 1)
+        self.assertIn("standing rule", notes[0].text.lower())
+        self.assertIn("news", notes[0].text.lower())
+
+    def test_silent_before_evening(self):
+        from engine import ReflectionMonitor
+        mon = ReflectionMonitor(now_fn=lambda: datetime(2026, 6, 16, 12, 0))
+        self.assertEqual(mon.check({}), [])
+
+    def test_at_most_once_per_day(self):
+        from engine import ReflectionMonitor
+        mon = ReflectionMonitor(now_fn=self._evening)
+        self.assertEqual(mon.check({"last_date": "2026-06-16"}), [])
+
+    def test_no_suggestions_is_silent_and_burns_the_day(self):
+        from engine import ReflectionMonitor
+        mon = ReflectionMonitor(now_fn=self._evening)
+        slice_ = {}
+        with patch.object(ReflectionMonitor, '_todays_memory', return_value="nothing notable"), \
+             patch('instructions.render_for_prompt', return_value=""), \
+             self._llm('{"suggestions": []}'):
+            self.assertEqual(mon.check(slice_), [])
+        self.assertEqual(slice_.get("last_date"), "2026-06-16")  # won't re-run today
+
+    def test_does_not_repropose_a_recent_suggestion(self):
+        from engine import ReflectionMonitor
+        mon = ReflectionMonitor(now_fn=self._evening)
+        rule = "Always send the news as an email, never a chat."
+        with patch.object(ReflectionMonitor, '_todays_memory', return_value="x"), \
+             patch('instructions.render_for_prompt', return_value=""), \
+             self._llm('{"suggestions": ["%s"]}' % rule):
+            notes = mon.check({"recent": [rule]})
+        self.assertEqual(notes, [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -550,6 +550,93 @@ Return ONLY JSON (no markdown):
         return [Notification("💡 " + text)]
 
 
+class ReflectionMonitor(Monitor):
+    """Learns from the day. Once each evening it reviews the day's working memory (what the
+    user told Aria + actions taken) and PROPOSES durable standing rules worth adopting — a
+    recurring preference, a correction, a pattern a sharp assistant would codify. Propose-
+    only: the user replies yes/no and the agent adds it via add_standing_instruction, so
+    nothing is auto-applied and behavior can't silently drift. (Facts are already consolidated
+    into long-term memory by nightly compaction; this adds the behavioral-rule layer — the
+    'learn from conversation' loop.)
+    """
+
+    PROMPT = """You are Aria reflecting on the day to get better at helping this user. Below is
+today's working memory — things they told you and actions you took. Identify up to TWO DURABLE
+behavioral rules worth adopting GOING FORWARD: a recurring preference, a correction they made,
+or a pattern worth codifying (e.g. "always send the news as an email, never a chat", "default
+reminders to 9am"). Default HARD to none — only a rule that is clearly useful, GENERAL (not a
+one-off), and that the user would plausibly want standing. Do NOT duplicate an existing rule.
+
+EXISTING STANDING RULES (don't duplicate):
+{existing}
+
+TODAY'S WORKING MEMORY:
+{context}
+
+Return ONLY JSON (no markdown):
+{{"suggestions": ["<imperative rule sentence>"]}}  (use [] if nothing is worth proposing)"""
+
+    def __init__(self, interval_seconds=3600, now_fn=None):
+        super().__init__(name="reflection", interval_seconds=interval_seconds)
+        self.now_fn = now_fn or datetime.now
+
+    def _todays_memory(self) -> str:
+        import memory
+        try:
+            with open(memory.SCRATCHPAD_PATH) as f:
+                return "\n".join(line.strip() for line in f if line.strip())[-4000:]
+        except Exception:
+            return ""
+
+    def check(self, state: dict) -> list:
+        now = self.now_fn()
+        if now.hour < 20:                       # reflect in the evening
+            return []
+        today = now.strftime('%Y-%m-%d')
+        if state.get("last_date") == today:     # at most once per day
+            return []
+        context = self._todays_memory()
+        if not context.strip():
+            state["last_date"] = today
+            return []
+        try:
+            from instructions import render_for_prompt
+            existing = render_for_prompt() or "(none)"
+        except Exception:
+            existing = "(none)"
+
+        from llm_router import get_llm
+        prompt = self.PROMPT.format(existing=existing, context=context)
+        try:
+            resp = get_llm(temperature=0).invoke(prompt)
+        except Exception as e:
+            print(f"[reflection] llm failed: {e}")
+            return []   # don't burn the day on a transient failure
+        content = resp.content
+        if isinstance(content, list):
+            content = next((b['text'] for b in content
+                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        try:
+            verdict = _parse_llm_json(content)
+        except Exception:
+            print(f"[reflection] unparseable: {content[:160]}")
+            return []
+
+        state["last_date"] = today
+        recent = state.get("recent", [])
+        out = []
+        for rule in (verdict.get("suggestions") or [])[:2]:
+            rule = (rule or "").strip()
+            if not rule or rule in recent:
+                continue
+            recent.append(rule)
+            out.append(Notification(
+                "🧠 Learning from today — want this as a standing rule?\n"
+                f"  “{rule}”\nReply yes to adopt it, or just ignore."))
+        state["recent"] = recent[-12:]
+        return out
+
+
 class NetflixMonitor(Monitor):
     """Acts the moment a household-update email lands; the *report* can wait.
 
@@ -656,8 +743,8 @@ class ProactiveEngine:
 def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
     return ProactiveEngine(
         monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(),
-                  InsightMonitor(), ReplyResolveMonitor(), NetflixMonitor(),
-                  HealthMonitor(), HeartbeatMonitor()],
+                  InsightMonitor(), ReflectionMonitor(), ReplyResolveMonitor(),
+                  NetflixMonitor(), HealthMonitor(), HeartbeatMonitor()],
         notify_fn=notify_fn,
     )
 
