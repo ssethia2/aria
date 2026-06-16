@@ -8,7 +8,7 @@ Several thin **interfaces** share one agent; the agent calls **skills**; a backg
 
 | Layer | Files | Role |
 |---|---|---|
-| Interfaces | `telegram_bot.py`, `interact.py`, `main.py` | Phone (text+voice notes), terminal REPL, scheduled briefing |
+| Interfaces | `telegram_bot.py`, `imessage_bot.py`, `interact.py`, `main.py` | Telegram (text+voice notes), iMessage (Mac), terminal REPL, scheduled briefing |
 | Voice | `voice.py`, `voice_live.py`, `webvoice/` | On-device Whisper REPL; realtime Gemini Live (barge-in); browser/phone client — all hand off to the agent via `escalate_to_aria` |
 | Agent | `agent_core.py` | One definition of tools + system prompt, shared by all interfaces |
 | Skills | `skills/` | Modular capabilities, each exposing LangChain tools |
@@ -77,6 +77,7 @@ Silent failure is the enemy. `healthcheck.py` validates secrets, email auth, mem
 ```
 agent_core.py            Shared agent: tools + cached system prompt
 telegram_bot.py          Telegram interface (long-poll; text + voice; progress updates)
+imessage_bot.py          iMessage interface on macOS (polls chat.db; imessage_reader/_send)
 interact.py              Terminal REPL
 voice.py                 Local voice REPL (on-device Whisper STT + say/piper TTS)
 voice_live.py            Realtime Gemini Live voice (barge-in; escalate_to_aria → brain)

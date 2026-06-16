@@ -65,10 +65,10 @@ Plus the invisible parts: durable conversations that survive restarts, a self-di
 
 ## 🏗️ How it's built
 
-A handful of thin interfaces — **Telegram** (text + voice notes), a **terminal REPL**, a **scheduled briefing**, and **realtime voice** (on-device, Gemini Live, and a browser/phone app) — all share one agent definition. The agent calls modular **skills**; a background **engine** runs polling monitors. Everything routes its LLM calls through one tiered, fallback-aware router.
+A handful of thin interfaces — **Telegram** (text + voice notes), **iMessage** (on a Mac), a **terminal REPL**, a **scheduled briefing**, and **realtime voice** (on-device, Gemini Live, and a browser/phone app) — all share one agent definition. The agent calls modular **skills**; a background **engine** runs polling monitors. Everything routes its LLM calls through one tiered, fallback-aware router.
 
 ```
-  Telegram · REPL · briefing · voice (local · live · web)
+  Telegram · iMessage · REPL · briefing · voice (local · live · web)
                 │
           agent_core.py ── tiered LLM router ──▶ Opus / Sonnet / Gemini·Haiku
                 │                                  (per-task, prompt-cached)

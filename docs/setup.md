@@ -48,6 +48,7 @@ With the Gmail-API path set up (`auth_google.py` requests the calendar scopes to
 | Semantic memory + LLM fallback | `GEMINI_API_KEY` ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) |
 | Smart home (Matter via Home Assistant) | `HA_URL`, `HA_TOKEN` |
 | External dead-man's-switch | `HEARTBEAT_URL` (a [healthchecks.io](https://healthchecks.io) ping URL; period ~20m, grace ~10m) |
+| iMessage interface (macOS) | `IMESSAGE_ALLOWED_HANDLES` + Full Disk Access & Automation→Messages — see [imessage.md](imessage.md). Run only one engine-hosting interface at a time. |
 | Local voice REPL (`voice.py`) | `pip install sounddevice`; `ARIA_WHISPER_MODEL` = `base` (default) or `tiny` (slower CPUs / Pi) for STT size |
 | Realtime voice (`voice_live.py`, `webvoice/`) | `GEMINI_API_KEY` (powers Gemini Live); optional `ARIA_LIVE_MODEL` to override the model. `webvoice/run.sh` + ngrok serves it to your phone (PWA). |
 | Voice barge-in on speakers (optional) | `brew install speexdsp` for echo cancellation in `voice_live.py --aec`; otherwise headphones (`--duplex`) or the default mic-gate |
