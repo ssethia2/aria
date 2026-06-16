@@ -283,6 +283,85 @@ def draft_email_reply(search_query: str, body: str) -> str:
             f"for review. Nothing was sent.")
 
 
+def _gather_bodies(payload, plains, htmls):
+    """Recurse a Gmail message payload, collecting decoded text/plain and text/html parts."""
+    data = payload.get('body', {}).get('data')
+    if data:
+        try:
+            text = base64.urlsafe_b64decode(data.encode()).decode('utf-8', errors='replace')
+        except Exception:
+            text = ''
+        mime = payload.get('mimeType', '')
+        if mime == 'text/plain':
+            plains.append(text)
+        elif mime == 'text/html':
+            htmls.append(text)
+    for part in payload.get('parts', []) or []:
+        _gather_bodies(part, plains, htmls)
+
+
+def _body_text(payload) -> str:
+    """Plain-text body of a Gmail message (prefers text/plain; strips tags from HTML)."""
+    plains, htmls = [], []
+    _gather_bodies(payload, plains, htmls)
+    if any(p.strip() for p in plains):
+        return "\n".join(plains).strip()
+    if htmls:
+        import re
+        return re.sub(r'<[^>]+>', ' ', "\n".join(htmls)).strip()
+    return ""
+
+
+@tool
+def read_email_thread(search_query: str) -> str:
+    """Read the contents of a SPECIFIC email thread the user asks about — search their
+    Gmail for it and return who it's from, the subject, and the message text, so you can
+    answer questions like "what's the project X thread about?" or "what did Rohan say".
+    READ-ONLY: nothing is sent, drafted, labeled, or deleted. Prefer this (not
+    `read_and_summarize_emails`) when the user asks about one particular thread, and never
+    claim you can't access email — search for it.
+
+    Args:
+        search_query: a Gmail search that finds the thread, in the user's words
+            (e.g. 'project x', 'from:rohan trip', 'subject:"apartment listings"').
+    """
+    import email_backend
+    if email_backend.using_app_password():
+        terms = [t.lower() for t in search_query.split()]
+        matches = [e for e in email_backend.imap_fetch_recent(40)
+                   if any(t in (e.get('subject', '') + e.get('sender', '') +
+                                e.get('snippet', '')).lower() for t in terms)]
+        if not matches:
+            return f"I searched your inbox for {search_query!r} but found nothing matching."
+        m = matches[0]
+        return (f"From: {m.get('sender', '?')}\nSubject: {m.get('subject', '?')}\n\n"
+                f"{m.get('snippet', '')}")
+
+    service = get_gmail_service()
+    if not service:
+        return "Gmail isn't available right now."
+
+    found = service.users().messages().list(
+        userId='me', q=search_query, maxResults=1).execute().get('messages', [])
+    if not found:
+        return f"I searched your Gmail for {search_query!r} but found no matching email."
+
+    thread_id = service.users().messages().get(
+        userId='me', id=found[0]['id'], format='minimal').execute().get('threadId')
+    messages = service.users().threads().get(
+        userId='me', id=thread_id, format='full').execute().get('messages', [])
+
+    parts = []
+    for msg in messages[-5:]:                       # last few messages in the thread
+        headers = {h['name']: h['value'] for h in msg['payload'].get('headers', [])}
+        text = " ".join(_body_text(msg['payload']).split())[:1500]
+        parts.append(f"From: {headers.get('From', '?')}\n"
+                     f"Subject: {headers.get('Subject', '?')}\n"
+                     f"Date: {headers.get('Date', '?')}\n\n{text}")
+    return (f"Found the thread (search: {search_query!r}), most recent messages:\n\n"
+            + "\n\n--- earlier ---\n\n".join(reversed(parts)))
+
+
 def user_has_replied(subject, since=None):
     """Gmail-API only: did the user SEND mail on this subject's thread AFTER `since`?
     `since` is a 'YYYY-MM-DD HH:MM:SS' (or 'YYYY-MM-DD') string — converted to an epoch

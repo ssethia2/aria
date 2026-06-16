@@ -27,7 +27,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from llm_router import get_llm
 from memory import add_memory, search_memory, read_cold_storage, load_profile
-from skills.email_manager import run_email_summary, draft_email_reply, update_memory
+from skills.email_manager import (run_email_summary, draft_email_reply, update_memory,
+                                  read_email_thread)
 from people import remember_person, get_person, list_people
 from skills.weather_manager import get_weather
 from skills.research_manager import web_search, fetch_webpage
@@ -86,6 +87,7 @@ def build_tools():
         search_memory,
         read_cold_storage,
         read_and_summarize_emails,
+        read_email_thread,
         generate_morning_news,
         update_netflix_household,
         add_commitment,
@@ -193,6 +195,7 @@ You have access to a semantic memory database and several active skills.
 - Use `search_memory` when the user asks about their past preferences, or when you need context about a person or topic mentioned in conversation.
 - Use `add_memory` when the user tells you a NEW fact, preference, or event about themselves. BE PROACTIVE in saving new preferences so you don't forget them!
 - Use `read_and_summarize_emails` when the user asks you to check their inbox or summarize their mail.
+- Use `read_email_thread` when the user asks about ONE specific thread ("what's the X email about?", "what did Rohan say?") — search for it and read it back. You DO have email access; never tell the user you can't access their Gmail.
 - Use `generate_morning_news` to get the latest news.
 - RESEARCH is one of your duties: use `web_search` + `fetch_webpage` for anything
   needing current information, lookups, comparisons, or recommendations — don't answer
