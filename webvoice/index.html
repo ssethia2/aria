@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Aria — voice</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 16px -apple-system, system-ui, sans-serif; background:#0b0f17; color:#e6edf3;
+         margin:0; padding:env(safe-area-inset-top) 16px 16px; }
+  h1 { font-size:20px; margin:16px 0 4px; }
+  #start { font-size:18px; padding:14px 28px; border:0; border-radius:999px;
+           background:#2f81f7; color:#fff; margin:12px 0; }
+  #start:disabled { background:#30363d; }
+  #status { font-size:13px; color:#8b949e; margin:8px 0; }
+  #log { white-space:pre-wrap; font:13px ui-monospace, monospace; background:#0d1117;
+         border:1px solid #21262d; border-radius:8px; padding:10px; height:48vh;
+         overflow:auto; }
+  .you { color:#7ee787; } .aria { color:#79c0ff; } .sys { color:#8b949e; } .err { color:#ff7b72; }
+</style>
+</head>
+<body>
+  <h1>Aria — voice spike</h1>
+  <button id="start">Tap to start talking</button>
+  <div id="status">idle</div>
+  <div id="log"></div>
+
+<script type="module">
+import { GoogleGenAI } from "https://esm.sh/@google/genai";
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status"), logEl = $("log");
+const setStatus = (s) => statusEl.textContent = s;
+function log(msg, cls="sys") {
+  const div = document.createElement("div");
+  div.className = cls; div.textContent = msg;
+  logEl.appendChild(div); logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ---------- audio helpers ----------
+function downsampleTo16k(input, inRate) {
+  const ratio = inRate / 16000;
+  const outLen = Math.max(1, Math.floor(input.length / ratio));
+  const out = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const idx = i * ratio, i0 = Math.floor(idx), frac = idx - i0;
+    const v = (input[i0] || 0) * (1 - frac) + (input[i0 + 1] || 0) * frac;
+    const s = Math.max(-1, Math.min(1, v));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+const b64FromBytes = (u8) => {
+  let s = ""; for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+  return btoa(s);
+};
+const int16FromB64 = (b64) => {
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return new Int16Array(u8.buffer);
+};
+
+// ---------- playback (24 kHz PCM from Gemini) ----------
+let playCtx, nextTime = 0; const activeSources = [];
+function playPcm(b64) {
+  const i16 = int16FromB64(b64), f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  const buf = playCtx.createBuffer(1, f32.length, 24000);
+  buf.getChannelData(0).set(f32);
+  const src = playCtx.createBufferSource();
+  src.buffer = buf; src.connect(playCtx.destination);
+  const now = playCtx.currentTime;
+  if (nextTime < now) nextTime = now;
+  src.start(nextTime); nextTime += buf.duration;
+  activeSources.push(src);
+  src.onended = () => { const i = activeSources.indexOf(src); if (i >= 0) activeSources.splice(i, 1); };
+}
+function stopPlayback() {           // barge-in: drop everything queued
+  for (const s of activeSources) { try { s.stop(); } catch (e) {} }
+  activeSources.length = 0; nextTime = 0;
+}
+
+// ---------- the escalate tool ----------
+const ESCALATE = { functionDeclarations: [{
+  name: "escalate_to_aria",
+  description: "Hand a request to Aria's full brain. Use for anything beyond casual chat: " +
+    "memory, email, calendar, reminders, notes, music, web search, or multi-step tasks.",
+  parameters: { type: "OBJECT",
+    properties: { request: { type: "STRING", description: "the user's request in their words" } },
+    required: ["request"] } }] };
+
+const SYSTEM = "You are Aria, talking with Satvik out loud. Keep replies short, warm, and " +
+  "natural — never an essay, never markdown. Handle casual chat yourself. For anything that " +
+  "needs his memory, email, calendar, reminders, notes, music, the web, or any multi-step " +
+  "task, call escalate_to_aria with his request, then speak back what it returns.";
+
+let session = null;
+
+async function start() {
+  $("start").disabled = true;
+  try {
+    setStatus("getting token…");
+    const { token, model } = await (await fetch("/live-token")).json();
+
+    setStatus("requesting mic…");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false });
+
+    playCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await playCtx.resume();
+    const capCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await capCtx.resume();
+    const inRate = capCtx.sampleRate;
+    log(`audio ready (capture ${inRate} Hz → 16 kHz, playback 24 kHz)`);
+
+    const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: "v1alpha" } });
+    setStatus("connecting to Gemini Live…");
+    session = await ai.live.connect({
+      model,
+      config: { responseModalities: ["AUDIO"], systemInstruction: SYSTEM, tools: [ESCALATE],
+                inputAudioTranscription: {}, outputAudioTranscription: {} },
+      callbacks: {
+        onopen: () => { setStatus("🎙️ live — just talk (interrupt any time)"); log("connected"); },
+        onmessage: onMessage,
+        onerror: (e) => log("live error: " + (e?.message || e), "err"),
+        onclose: (e) => { setStatus("session closed"); log("closed: " + (e?.reason || ""), "err"); },
+      },
+    });
+
+    // mic → worklet → downsample → Live
+    await capCtx.audioWorklet.addModule("/capture-worklet.js");
+    const srcNode = capCtx.createMediaStreamSource(stream);
+    const node = new AudioWorkletNode(capCtx, "capture");
+    const sink = capCtx.createGain(); sink.gain.value = 0;   // pull graph w/o feedback
+    srcNode.connect(node); node.connect(sink); sink.connect(capCtx.destination);
+
+    let pending = [], pendingLen = 0;
+    node.port.onmessage = (e) => {
+      pending.push(e.data); pendingLen += e.data.length;
+      if (pendingLen < inRate * 0.05) return;               // ~50 ms batches
+      const flat = new Float32Array(pendingLen); let o = 0;
+      for (const f of pending) { flat.set(f, o); o += f.length; }
+      pending = []; pendingLen = 0;
+      const pcm16 = downsampleTo16k(flat, inRate);
+      const b64 = b64FromBytes(new Uint8Array(pcm16.buffer));
+      try { session.sendRealtimeInput({ audio: { data: b64, mimeType: "audio/pcm;rate=16000" } }); }
+      catch (err) { log("send failed: " + err, "err"); }
+    };
+  } catch (err) {
+    log("start failed: " + (err?.message || err), "err"); setStatus("error");
+    $("start").disabled = false;
+  }
+}
+
+async function onMessage(msg) {
+  const sc = msg.serverContent;
+  if (sc) {
+    if (sc.interrupted) stopPlayback();
+    if (sc.inputTranscription?.text) log("you: " + sc.inputTranscription.text, "you");
+    if (sc.outputTranscription?.text) log("aria: " + sc.outputTranscription.text, "aria");
+    for (const p of (sc.modelTurn?.parts || [])) {
+      if (p.inlineData?.data) playPcm(p.inlineData.data);
+    }
+  }
+  if (msg.toolCall) {
+    for (const fc of msg.toolCall.functionCalls) {
+      log("→ brain: " + (fc.args?.request || ""));
+      let result = "Sorry, I couldn't reach my tools.";
+      try {
+        const r = await fetch("/agent", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ request: fc.args?.request || "" }) });
+        result = (await r.json()).result;
+        log("brain: " + result.slice(0, 120));
+      } catch (e) { log("brain error: " + e, "err"); }
+      try { session.sendToolResponse({ functionResponses: [{ id: fc.id, name: fc.name, response: { result } }] }); }
+      catch (e) { log("tool response failed: " + e, "err"); }
+    }
+  }
+}
+
+$("start").addEventListener("click", start);
+</script>
+</body>
+</html>
