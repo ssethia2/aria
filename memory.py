@@ -13,6 +13,8 @@ from langchain_core.tools import tool
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from dotenv import load_dotenv
 
+from tenant import is_guest, get_current_user, safe_id
+
 load_dotenv()
 
 PROFILE_PATH = os.path.join(os.path.dirname(__file__), "profile.json")
@@ -22,6 +24,9 @@ SCRATCHPAD_PATH = os.path.join(os.path.dirname(__file__), "daily_scratchpad.txt"
 # --- Layer 1: Core Identity (Static Profile) ---
 
 def load_profile():
+    # Guests have no static owner profile — their personalization lives in their own memory.
+    if is_guest():
+        return {}
     if not os.path.exists(PROFILE_PATH):
         return {}
     with open(PROFILE_PATH, "r") as f:
@@ -46,6 +51,7 @@ ACTION_LOG_PREFIX = "[Aria proactive action"
 # --- Layer 2: Semantic Memory (ChromaDB) ---
 
 # Initialize ChromaDB correctly on first load
+chroma_client = None
 try:
     chroma_client = chromadb.PersistentClient(path=DB_PATH)
     collection = chroma_client.get_or_create_collection(name="aria_memory")
@@ -58,11 +64,30 @@ except Exception as e:
     collection = None
     embeddings = None
 
+
+def _guest_collection():
+    """The current guest's OWN ChromaDB collection — isolated per user (`mem_<user>`)."""
+    if chroma_client is None:
+        return None
+    return chroma_client.get_or_create_collection(name=f"mem_{safe_id(get_current_user())}")
+
 @tool
 def add_memory(fact: str) -> str:
     """Use this tool to add a new memory, fact, preference, or event about the user.
     Provide a clear, detailed sentence (e.g., 'Satvik hates newsletters', 'Satvik is traveling to NY in July').
     """
+    if is_guest():
+        # Guests write straight into their own isolated collection (no shared scratchpad,
+        # no compaction job — those are owner-only).
+        col = _guest_collection()
+        if col is None or embeddings is None:
+            return "Memory isn't available right now."
+        try:
+            col.add(ids=[uuid.uuid4().hex], documents=[fact],
+                    embeddings=[embeddings.embed_query(fact)])
+            return f"Got it — I'll remember that: {fact}"
+        except Exception as e:
+            return f"Failed to add memory: {str(e)}"
     try:
         with open(SCRATCHPAD_PATH, "a") as f:
             f.write(fact + "\n")
@@ -76,8 +101,22 @@ def search_memory(query: str, n_results: int = 3) -> str:
     """Use this tool to search the user's semantic memory for relevant facts or past events.
     Provide a search query (e.g., 'Does Satvik like coffee?', 'travel plans').
     """
+    if is_guest():
+        # Query ONLY this guest's collection — never the owner's scratchpad/collection.
+        col = _guest_collection()
+        if col is None or embeddings is None:
+            return "No relevant memories found."
+        try:
+            res = col.query(query_embeddings=[embeddings.embed_query(query)], n_results=n_results)
+            docs = res['documents'][0] if res.get('documents') else []
+        except Exception as e:
+            return f"[memory error: {str(e)}]"
+        if not docs:
+            return "No relevant memories found."
+        return "What I remember:\n" + "\n".join(f"- {d}" for d in docs)
+
     output = []
-    
+
     # 1. Working Memory (Scratchpad)
     if os.path.exists(SCRATCHPAD_PATH):
         with open(SCRATCHPAD_PATH, "r") as f:
