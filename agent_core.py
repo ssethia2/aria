@@ -27,6 +27,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from llm_router import get_llm
 from memory import add_memory, search_memory, read_cold_storage, load_profile
+from tenant import is_guest
 from skills.email_manager import (run_email_summary, draft_email_reply, update_memory,
                                   read_email_thread)
 from people import remember_person, get_person, list_people
@@ -80,8 +81,15 @@ def generate_morning_news() -> str:
     return "News briefing generated successfully."
 
 
-def build_tools():
-    """The full tool array Aria can call. Add new skills here (see CONTRIBUTING.md)."""
+def build_tools(guest=False):
+    """The tool array Aria can call. Add new skills here (see CONTRIBUTING.md).
+
+    guest=True returns the restricted, account-free subset for friend/guest sessions:
+    isolated per-user memory + stateless general tools ONLY. Nothing that touches the
+    owner's accounts or shared data (no email, calendar, contacts, notes, reminders,
+    music, smart-home, browser, or system access)."""
+    if guest:
+        return [add_memory, search_memory, get_weather, web_search, fetch_webpage]
     return [
         add_memory,
         search_memory,
@@ -140,7 +148,7 @@ def _stable_prompt() -> str:
     standing rule or profile (rare), which is the right time to rebuild the cache.
     """
     profile_data = load_profile()
-    standing_instructions = render_for_prompt()
+    standing_instructions = "" if is_guest() else render_for_prompt()
 
     return f"""You are Aria (Aria Responds Intelligently Always), a highly intelligent, proactive, and friendly personal AI assistant.
 Your goal is to help your user manage their life, emails, and news.
@@ -277,8 +285,18 @@ def build_system_message() -> SystemMessage:
     # assistant interactions — the dominant cause of cache misses for personal use.
     # Reads stay ~0.1x; the write premium (2x vs 1.25x) pays off after one re-hit/hour.
     ttl = os.getenv("ARIA_CACHE_TTL", "1h")
+    stable = _stable_prompt()
+    if is_guest():
+        # Guest sessions get a restricted toolset; tell the model so it sets expectations
+        # instead of pretending to have email/calendar. (Profile + standing rules are
+        # already empty for guests, so this banner is the only owner-vs-guest prompt delta.)
+        stable = ("GUEST MODE — you are a personal demo of Aria for a guest user. You have "
+                  "ONLY: your memory of THIS guest (add_memory / search_memory), web search, "
+                  "and weather. You do NOT have email, calendar, contacts, notes, reminders, "
+                  "music, smart-home, or anyone's accounts — if asked for those, say you "
+                  "can't in guest mode. Be warm, and remember what they tell you.\n\n") + stable
     return SystemMessage(content=[
-        {"type": "text", "text": _stable_prompt(),
+        {"type": "text", "text": stable,
          "cache_control": {"type": "ephemeral", "ttl": ttl}},
         {"type": "text",
          "text": f"The current date and time is: {now}. Use this for any date math "
@@ -306,16 +324,17 @@ def thread_config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}}
 
 
-def build_agent(checkpointer=None):
+def build_agent(checkpointer=None, guest=False):
     """Construct the LangGraph ReAct agent. Raises if no LLM can be initialized.
 
     Pass a checkpointer (open_checkpointer()) to get durable conversations; omit it
-    for stateless one-shot use.
+    for stateless one-shot use. guest=True builds the restricted guest agent (account-free
+    toolset); invoke it only with a tenant context set (see tenant.set_current_user).
     """
     llm = get_llm(temperature=0)
     return create_agent(
         llm,
-        build_tools(),
+        build_tools(guest=guest),
         middleware=[_fresh_system_prompt],
         checkpointer=checkpointer,
     )
