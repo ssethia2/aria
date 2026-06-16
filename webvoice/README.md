@@ -16,20 +16,29 @@ on a phone.
 - **The escalate handoff works** — Gemini calls `escalate_to_aria` → `POST /agent` → the full
   Claude agent (memory, email, calendar, tools) → spoken back. Snappy.
 
-## Run it
-```bash
-source venv/bin/activate
-uvicorn webvoice.server:app --host 0.0.0.0 --port 8800
-```
-Desktop test: open http://localhost:8800 (localhost is a secure context, so mic works).
+## Use it on your phone (the easy way)
 
-Phone test (iOS needs HTTPS for mic): tunnel it and open the https URL on the phone:
+One command starts the server **and** the HTTPS tunnel the phone needs:
 ```bash
-ngrok http 8800          # or: cloudflared tunnel --url http://localhost:8800
+export ARIA_NGROK_DOMAIN=your-name.ngrok-free.app   # see "stable URL" below
+webvoice/run.sh
 ```
+It prints a URL — open it on your iPhone, then **Share → Add to Home Screen**. That drops a
+tap-to-launch **Aria** icon that opens fullscreen, like a native app. Tap it, hit Start, talk.
+
+**Stable URL (do this once):** reserve a free static domain at dashboard.ngrok.com → Domains,
+and set `ARIA_NGROK_DOMAIN` to it. Without it `run.sh` uses a random ngrok URL each run, so the
+home-screen icon would break — the reserved domain keeps it permanent.
+
+Desktop check: `webvoice/run.sh` without a domain, or just
+`uvicorn webvoice.server:app --port 8800` and open http://localhost:8800 (localhost allows mic
+without HTTPS).
 
 Needs `GEMINI_API_KEY` (Live + token) and `ANTHROPIC_API_KEY` (the brain) in `.env`.
 Optional `ARIA_LIVE_MODEL` (default is the 2.5 native-audio preview).
+
+> The backend has to be running for the app to work. For now that's your Mac (run `run.sh`
+> when you want it); for always-on, host it on the Pi/cloud with a persistent tunnel.
 
 ## Status: prototype, not production
 - Single shared conversation thread (`web-voice`), **no auth** — do not expose publicly.

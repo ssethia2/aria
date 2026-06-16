@@ -75,6 +75,16 @@ def worklet():
     return FileResponse(HERE / "capture-worklet.js", media_type="application/javascript")
 
 
+@app.get("/manifest.json")
+def manifest():
+    return FileResponse(HERE / "manifest.json", media_type="application/manifest+json")
+
+
+@app.get("/icon.png")
+def icon():
+    return FileResponse(HERE / "icon.png", media_type="image/png")
+
+
 @app.get("/live-token")
 def live_token():
     """Mint a single-use ephemeral token so the browser can open Live without the API key."""
