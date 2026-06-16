@@ -42,7 +42,9 @@ python3 webvoice/add_friend.py "Alice" https://$ARIA_NGROK_DOMAIN
   (HTTPS, the URL friends know) reaches it, and `/agent` + `/live-token` are invite-gated.
 - **No proactivity engine here** — webvoice builds a guest agent and never starts the
   engine, so it's safe to run alongside your Telegram bot (no double-engine conflict).
-- **Cost** is on you (Gemini Live + Claude per friend). Per-friend caps land in Phase 4;
-  until then, watch usage with a handful of friends.
+- **Cost** is on you (Gemini Live + Claude per friend), but **capped per friend per day**:
+  `ARIA_GUEST_DAILY_TOKENS` (Live sessions/day, default 12) and `ARIA_GUEST_DAILY_AGENT`
+  (brain calls/day, default 60) in `.env`. Over the cap, the friend hears a "try again
+  tomorrow" message; counts reset daily (`webvoice/usage.json`).
 - **Alternative to ngrok:** a VPS with your own domain + Caddy (auto-HTTPS reverse proxy
   to `127.0.0.1:8800`) instead of the tunnel service — swap step 3/4 accordingly.

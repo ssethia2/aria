@@ -46,6 +46,19 @@ class TestWebvoiceAuth(unittest.TestCase):
         self.assertEqual(captured["thread"], "guest-alice")  # in their own thread
         self.assertFalse(tenant.is_guest())                # context cleaned up after
 
+    def test_live_token_over_daily_cap_returns_429(self):
+        with patch.object(server, "_friends", return_value={"good": "alice"}), \
+             patch("webvoice.usage.check_and_increment", return_value=False):
+            r = self.client.get("/live-token?t=good")
+        self.assertEqual(r.status_code, 429)
+
+    def test_agent_over_daily_cap_returns_friendly_message(self):
+        with patch.object(server, "_friends", return_value={"good": "alice"}), \
+             patch("webvoice.usage.check_and_increment", return_value=False):
+            r = self.client.post("/agent", json={"request": "hi", "token": "good"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("limit", r.json()["result"].lower())
+
     def test_user_for_resolves_and_raises(self):
         with patch.object(server, "_friends", return_value={"t": "bob"}):
             self.assertEqual(server._user_for("t"), "bob")

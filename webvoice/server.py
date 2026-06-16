@@ -29,6 +29,7 @@ from google import genai
 from google.genai import types
 
 import tenant
+from webvoice import usage
 from agent_core import build_agent, open_checkpointer, thread_config, extract_text
 
 load_dotenv()
@@ -111,7 +112,9 @@ def icon():
 @app.get("/live-token")
 def live_token(t: str = ""):
     """Mint a single-use ephemeral Live token — invite-gated so only friends can connect."""
-    _user_for(t)
+    uid = _user_for(t)
+    if not usage.check_and_increment(uid, "tokens"):
+        raise HTTPException(status_code=429, detail="Daily voice limit reached — try again tomorrow.")
     tok = _genai.auth_tokens.create(config=types.CreateAuthTokenConfig(
         uses=1,
         live_connect_constraints=types.LiveConnectConstraints(model=MODEL, config=LIVE_CONFIG),
@@ -128,6 +131,8 @@ class AgentReq(BaseModel):
 def agent(req: AgentReq):
     """Run the guest brain for one escalated request — isolated to this friend's memory."""
     uid = _user_for(req.token)
+    if not usage.check_and_increment(uid, "agent"):
+        return {"result": "You've hit today's limit with me — let's pick this up tomorrow."}
     ctx = tenant.set_current_user(uid)       # routes memory + guest mode for this request
     try:
         result = _agent_instance().invoke(
