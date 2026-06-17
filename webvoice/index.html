@@ -24,13 +24,23 @@
          border:1px solid #21262d; border-radius:8px; padding:10px; height:48vh;
          overflow:auto; }
   .you { color:#7ee787; } .aria { color:#79c0ff; } .sys { color:#8b949e; } .err { color:#ff7b72; }
+  #composer { display:flex; gap:8px; margin-top:10px; }
+  #msg { flex:1; font-size:16px; padding:12px 14px; border-radius:10px;
+         border:1px solid #21262d; background:#0d1117; color:#e6edf3; }
+  #send { font-size:16px; padding:12px 18px; border:0; border-radius:10px;
+          background:#2f81f7; color:#fff; }
+  #send:disabled { background:#30363d; }
 </style>
 </head>
 <body>
-  <h1>Aria — voice spike</h1>
+  <h1>Aria</h1>
   <button id="start">Tap to start talking</button>
   <div id="status">idle</div>
   <div id="log"></div>
+  <form id="composer" autocomplete="off">
+    <input id="msg" type="text" placeholder="…or type a message" autocomplete="off">
+    <button id="send" type="submit">Send</button>
+  </form>
 
 <script type="module">
 import { GoogleGenAI } from "https://esm.sh/@google/genai";
@@ -102,12 +112,11 @@ const SYSTEM = "You are Aria, talking with Satvik out loud. Keep replies short, 
   "task, call escalate_to_aria with his request, then speak back what it returns.";
 
 let session = null;
-let invite = "";
+let invite = new URLSearchParams(location.search).get("t") || "";   // text chat needs it too
 
 async function start() {
   $("start").disabled = true;
   try {
-    invite = new URLSearchParams(location.search).get("t") || "";
     setStatus("getting token…");
     const tokRes = await fetch("/live-token?t=" + encodeURIComponent(invite));
     if (!tokRes.ok) {     // 403 invalid invite, or 429 daily limit reached
@@ -194,6 +203,29 @@ async function onMessage(msg) {
     }
   }
 }
+
+// ---------- text chat (same isolated brain as the voice escalate path) ----------
+async function sendText(text) {
+  text = text.trim();
+  if (!text) return;
+  if (!invite) { log("This link is missing its invite token.", "err"); return; }
+  log("you: " + text, "you");
+  $("send").disabled = true; $("msg").value = "";
+  try {
+    const r = await fetch("/agent", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: text, token: invite }) });
+    if (!r.ok) {                       // 403 invalid invite (429s come back as a 200 message)
+      let msg = "Couldn't send — invalid invite or daily limit reached.";
+      try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (e) {}
+      log(msg, "err");
+    } else {
+      log("aria: " + (await r.json()).result, "aria");
+    }
+  } catch (e) { log("send error: " + e, "err"); }
+  $("send").disabled = false; $("msg").focus();
+}
+$("composer").addEventListener("submit", (e) => { e.preventDefault(); sendText($("msg").value); });
 
 $("start").addEventListener("click", start);
 </script>
