@@ -409,3 +409,72 @@ def drop_commitment(commitment_id: int) -> str:
     """Drop a commitment the user no longer intends to do (without marking it done)."""
     return (f"Dropped commitment #{commitment_id}." if drop(commitment_id)
             else f"No open commitment with id {commitment_id}.")
+
+
+def commitment_patterns(today=None) -> dict:
+    """Mine the commitments table for patterns over time — deterministic, no LLM. What's
+    slipping (open + past due), where slippage concentrates (which people / kinds), and how
+    often completed items landed late. Returns the raw stats plus a `findings` list of
+    human-readable sentences (only genuinely notable ones)."""
+    from collections import Counter
+    today = today or datetime.now().date()
+
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT id, description, kind, who, due_date, status, completed_at FROM commitments"
+    ).fetchall()
+    conn.close()
+
+    def _d(s):
+        try:
+            return datetime.fromisoformat((s or "")[:10]).date()
+        except Exception:
+            return None
+
+    overdue, late, done_with_due, open_count = [], 0, 0, 0
+    by_who, by_kind = Counter(), Counter()
+    for cid, desc, kind, who, due, status, completed in rows:
+        dd = _d(due)
+        if status == 'open':
+            open_count += 1
+            if dd and dd < today:
+                overdue.append({"id": cid, "description": desc, "who": who, "kind": kind,
+                                "days_overdue": (today - dd).days})
+                if who:
+                    by_who[who] += 1
+                by_kind[kind] += 1
+        elif status == 'done' and dd:
+            done_with_due += 1
+            cd = _d(completed)
+            if cd and cd > dd:
+                late += 1
+
+    overdue.sort(key=lambda x: -x["days_overdue"])
+    findings = []
+    if overdue:
+        o = overdue[0]
+        findings.append(f"{len(overdue)} open commitment(s) overdue — oldest: "
+                        f"“{o['description'][:50]}” ({o['days_overdue']}d past due).")
+    for who, n in by_who.most_common(2):
+        if n >= 2:
+            findings.append(f"{n} overdue commitments involve {who} — a recurring slip.")
+    for kind, n in by_kind.most_common(1):
+        if n >= 3:
+            findings.append(f"Your “{kind}” commitments pile up — {n} are overdue.")
+    if done_with_due >= 4 and late:
+        findings.append(f"{late} of {done_with_due} completed commitments finished late.")
+
+    return {"overdue": overdue, "late_completions": late, "done_with_due": done_with_due,
+            "overdue_by_who": dict(by_who), "overdue_by_kind": dict(by_kind),
+            "open_count": open_count, "findings": findings}
+
+
+@tool
+def analyze_commitments() -> str:
+    """Surface PATTERNS across the user's commitments over time — what's slipping (overdue),
+    where it concentrates (which people/kinds), whether things finish late. Use when they ask
+    how they're doing on commitments, what keeps slipping, or for a review."""
+    p = commitment_patterns()
+    if not p["findings"]:
+        return "Nothing notable — nothing's overdue and recent commitments closed on time."
+    return "Patterns I see across your commitments:\n" + "\n".join(f"• {f}" for f in p["findings"])
