@@ -19,19 +19,28 @@ import re
 import contextvars
 
 _current_user: contextvars.ContextVar = contextvars.ContextVar("current_user", default=None)
+_current_name: contextvars.ContextVar = contextvars.ContextVar("current_name", default=None)
 
 
-def set_current_user(user_id):
-    """Set the current guest for this context. Returns a token for reset_current_user()."""
-    return _current_user.set(user_id)
+def set_current_user(user_id, name=None):
+    """Set the current guest (+ optional display name) for this context. Returns a token to
+    pass to reset_current_user()."""
+    return (_current_user.set(user_id), _current_name.set(name))
 
 
 def reset_current_user(token):
-    _current_user.reset(token)
+    user_tok, name_tok = token
+    _current_user.reset(user_tok)
+    _current_name.reset(name_tok)
 
 
 def get_current_user():
     return _current_user.get()
+
+
+def get_current_name():
+    """The current guest's display name, if set (so Aria can greet them by name)."""
+    return _current_name.get()
 
 
 def is_guest() -> bool:

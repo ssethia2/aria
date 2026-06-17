@@ -26,9 +26,13 @@ def main():
     user_id = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "friend"
 
     data = json.loads(FRIENDS.read_text()) if FRIENDS.exists() else {}
+
+    def _id(v):  # handle both the {"id","name"} record and the legacy bare-string value
+        return v.get("id") if isinstance(v, dict) else v
+
     # reuse an existing token for this user_id if present, so their memory stays theirs
-    token = next((t for t, u in data.items() if u == user_id), None) or secrets.token_urlsafe(12)
-    data[token] = user_id
+    token = next((t for t, v in data.items() if _id(v) == user_id), None) or secrets.token_urlsafe(12)
+    data[token] = {"id": user_id, "name": name}
     FRIENDS.write_text(json.dumps(data, indent=2))
 
     print(f"Added '{name}'  (user_id = {user_id})")

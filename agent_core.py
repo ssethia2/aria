@@ -27,7 +27,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from llm_router import get_llm
 from memory import add_memory, search_memory, read_cold_storage, load_profile
-from tenant import is_guest
+from tenant import is_guest, get_current_name
 from skills.email_manager import (run_email_summary, draft_email_reply, update_memory,
                                   read_email_thread)
 from people import remember_person, get_person, list_people
@@ -90,7 +90,10 @@ def build_tools(guest=False):
     owner's accounts or shared data (no email, calendar, contacts, notes, reminders,
     music, smart-home, browser, or system access)."""
     if guest:
-        return [add_memory, search_memory, get_weather, web_search, fetch_webpage]
+        # Per-user, isolated tools only — memory, their own commitments, and stateless
+        # lookups. Nothing touching the owner's accounts/data.
+        return [add_memory, search_memory, add_commitment, list_commitments,
+                complete_commitment, drop_commitment, get_weather, web_search, fetch_webpage]
     return [
         add_memory,
         search_memory,
@@ -299,11 +302,14 @@ def build_system_message() -> SystemMessage:
         # Guest sessions get a restricted toolset; tell the model so it sets expectations
         # instead of pretending to have email/calendar. (Profile + standing rules are
         # already empty for guests, so this banner is the only owner-vs-guest prompt delta.)
-        stable = ("GUEST MODE — you are a personal demo of Aria for a guest user. You have "
-                  "ONLY: your memory of THIS guest (add_memory / search_memory), web search, "
-                  "and weather. You do NOT have email, calendar, contacts, notes, reminders, "
-                  "music, smart-home, or anyone's accounts — if asked for those, say you "
-                  "can't in guest mode. Be warm, and remember what they tell you.\n\n") + stable
+        who = get_current_name()
+        greeting = f"You're talking with {who}. " if who else ""
+        stable = (f"GUEST MODE — {greeting}you are a personal demo of Aria for a guest user. "
+                  "You have ONLY: your memory of THIS guest (add_memory / search_memory), their "
+                  "own reminders/commitments (add/list/complete/drop_commitment), web search, "
+                  "and weather. You do NOT have email, calendar, contacts, notes, music, smart-"
+                  "home, or anyone's accounts — if asked for those, say you can't in guest mode. "
+                  "Be warm, use their name, and remember what they tell you.\n\n") + stable
     return SystemMessage(content=[
         {"type": "text", "text": stable,
          "cache_control": {"type": "ephemeral", "ttl": ttl}},

@@ -19,7 +19,16 @@ from datetime import datetime, timedelta
 
 from langchain_core.tools import tool
 
+from tenant import get_current_user
+
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'aria_calendar.db')
+
+
+def _scope():
+    """(SQL predicate, params) restricting commitments to the current tenant. The owner runs
+    with no tenant set → only their rows (tenant IS NULL); a guest sees only their own."""
+    uid = get_current_user()
+    return ("tenant = ?", [uid]) if uid is not None else ("tenant IS NULL", [])
 
 VALID_KINDS = {'reply_owed', 'deadline', 'people_date', 'promise'}
 
@@ -45,9 +54,14 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'open',
             source TEXT NOT NULL DEFAULT 'chat',
             created_at TEXT NOT NULL,
-            completed_at TEXT
+            completed_at TEXT,
+            tenant TEXT
         )
     ''')
+    # Multi-user isolation: add the tenant column to pre-existing DBs (owner rows = NULL).
+    cols = [r[1] for r in cursor.execute("PRAGMA table_info(commitments)").fetchall()]
+    if 'tenant' not in cols:
+        cursor.execute("ALTER TABLE commitments ADD COLUMN tenant TEXT")
     # One-time migration: legacy reminders (calendar_manager) become promises.
     cursor.execute("SELECT COUNT(*) FROM commitments")
     if cursor.fetchone()[0] == 0:
@@ -83,10 +97,10 @@ def add(description, kind='promise', who=None, due_date=None, due_time=None,
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO commitments (description, kind, who, due_date, due_time, recurring,
-                                 status, source, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                                 status, source, created_at, tenant)
+        VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
     ''', (description, kind, who, due_date, due_time, recurring, source,
-          datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+          datetime.now().strftime('%Y-%m-%d %H:%M:%S'), get_current_user()))
     conn.commit()
     cid = cursor.lastrowid
     conn.close()
@@ -95,10 +109,11 @@ def add(description, kind='promise', who=None, due_date=None, due_time=None,
 
 def get_open_commitments():
     """All open commitments, dated ones first (soonest due), undated last."""
+    pred, sp = _scope()
     conn = _conn()
     rows = conn.execute(
-        f"{_SELECT} WHERE status = 'open' "
-        "ORDER BY due_date IS NULL, due_date ASC, id ASC").fetchall()
+        f"{_SELECT} WHERE status = 'open' AND {pred} "
+        "ORDER BY due_date IS NULL, due_date ASC, id ASC", sp).fetchall()
     conn.close()
     return _rows_to_dicts(rows)
 
@@ -107,10 +122,12 @@ def get_due_commitments(today=None):
     """Open NON-recurring commitments due today or overdue. Recurring reminders are
     excluded — they fire as pings on their own schedule and are never 'overdue'."""
     today = today or datetime.now().strftime('%Y-%m-%d')
+    pred, sp = _scope()
     conn = _conn()
     rows = conn.execute(
         f"{_SELECT} WHERE status = 'open' AND recurring IS NULL "
-        "AND due_date IS NOT NULL AND due_date <= ? ORDER BY due_date ASC", (today,)).fetchall()
+        f"AND due_date IS NOT NULL AND due_date <= ? AND {pred} ORDER BY due_date ASC",
+        [today, *sp]).fetchall()
     conn.close()
     return _rows_to_dicts(rows)
 
@@ -147,10 +164,11 @@ def get_upcoming_commitments(days=7, today=None):
     """Open commitments due within the next `days` days (excluding today/overdue)."""
     today = today or datetime.now().strftime('%Y-%m-%d')
     horizon = (datetime.strptime(today, '%Y-%m-%d') + timedelta(days=days)).strftime('%Y-%m-%d')
+    pred, sp = _scope()
     conn = _conn()
     rows = conn.execute(
-        f"{_SELECT} WHERE status = 'open' AND due_date > ? AND due_date <= ? "
-        "ORDER BY due_date ASC", (today, horizon)).fetchall()
+        f"{_SELECT} WHERE status = 'open' AND due_date > ? AND due_date <= ? AND {pred} "
+        "ORDER BY due_date ASC", [today, horizon, *sp]).fetchall()
     conn.close()
     return _rows_to_dicts(rows)
 
@@ -198,9 +216,10 @@ def advance_recurring(commitment_id, today=None):
     (skips past missed periods in one jump, so a long-offline gap = one catch-up
     ping, not a burst). No-op for non-recurring."""
     today = today or datetime.now().strftime('%Y-%m-%d')
+    pred, sp = _scope()
     conn = _conn()
-    row = conn.execute("SELECT recurring, due_date FROM commitments WHERE id = ?",
-                       (commitment_id,)).fetchone()
+    row = conn.execute(f"SELECT recurring, due_date FROM commitments WHERE id = ? AND {pred}",
+                       [commitment_id, *sp]).fetchone()
     if not row or not row[0] or not row[1]:
         conn.close()
         return
@@ -219,10 +238,11 @@ def get_timed_due_now(now=None):
     now = now or datetime.now()
     today = now.strftime('%Y-%m-%d')
     hhmm = now.strftime('%H:%M')
+    pred, sp = _scope()
     conn = _conn()
     rows = conn.execute(
         f"{_SELECT} WHERE status = 'open' AND due_date = ? AND due_time IS NOT NULL "
-        "AND due_time <= ?", (today, hhmm)).fetchall()
+        f"AND due_time <= ? AND {pred}", [today, hhmm, *sp]).fetchall()
     conn.close()
     return _rows_to_dicts(rows)
 
@@ -234,10 +254,11 @@ def get_pingable_now(now=None):
     now = now or datetime.now()
     today = now.strftime('%Y-%m-%d')
     hhmm = now.strftime('%H:%M')
+    pred, sp = _scope()
     conn = _conn()
     rows = conn.execute(
         f"{_SELECT} WHERE status = 'open' AND due_date IS NOT NULL AND due_date <= ? "
-        "AND (due_time IS NOT NULL OR recurring IS NOT NULL)", (today,)).fetchall()
+        f"AND (due_time IS NOT NULL OR recurring IS NOT NULL) AND {pred}", [today, *sp]).fetchall()
     conn.close()
     out = []
     for c in _rows_to_dicts(rows):
@@ -274,10 +295,11 @@ def resolve_replied(reply_checker):
 
 def complete(commitment_id):
     """Mark done. Recurring commitments roll to their next occurrence instead of closing."""
+    pred, sp = _scope()
     conn = _conn()
     row = conn.execute(
-        "SELECT description, recurring, due_date FROM commitments WHERE id = ? AND status = 'open'",
-        (commitment_id,)).fetchone()
+        f"SELECT description, recurring, due_date FROM commitments WHERE id = ? "
+        f"AND status = 'open' AND {pred}", [commitment_id, *sp]).fetchone()
     if not row:
         conn.close()
         return None
@@ -298,10 +320,11 @@ def complete(commitment_id):
 
 
 def drop(commitment_id):
+    pred, sp = _scope()
     conn = _conn()
     cursor = conn.execute(
-        "UPDATE commitments SET status = 'dropped' WHERE id = ? AND status = 'open'",
-        (commitment_id,))
+        f"UPDATE commitments SET status = 'dropped' WHERE id = ? AND status = 'open' AND {pred}",
+        [commitment_id, *sp])
     conn.commit()
     changed = cursor.rowcount
     conn.close()
@@ -419,10 +442,11 @@ def commitment_patterns(today=None) -> dict:
     from collections import Counter
     today = today or datetime.now().date()
 
+    pred, sp = _scope()
     conn = _conn()
     rows = conn.execute(
-        "SELECT id, description, kind, who, due_date, status, completed_at FROM commitments"
-    ).fetchall()
+        "SELECT id, description, kind, who, due_date, status, completed_at FROM commitments "
+        f"WHERE {pred}", sp).fetchall()
     conn.close()
 
     def _d(s):
