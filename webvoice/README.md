@@ -11,9 +11,10 @@ on a phone.
 ## Letting friends try it (guest mode)
 
 This backend is **multi-user and invite-only**. Each friend gets a link with a token; that
-token maps to an isolated guest: their **own** memory, an **account-free** toolset (memory +
-web + weather — no email/calendar/contacts/etc.), their **own** conversation thread. Friends
-can never see your data or each other's. (You use telegram/`voice_live` for your full Aria.)
+token maps to an isolated guest who Aria greets **by name**, with their **own** memory, their
+**own** reminders/commitments, and an **account-free** toolset (memory + reminders + web +
+weather — no email/calendar/contacts/etc.), in their **own** conversation thread. Friends can
+never see your data or each other's. (You use telegram/`voice_live` for your full Aria.)
 
 ```bash
 python3 webvoice/add_friend.py "Alice" https://your-domain.ngrok-free.app

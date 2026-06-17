@@ -38,13 +38,20 @@ HERE = Path(__file__).resolve().parent
 FRIENDS_PATH = HERE / "friends.json"     # gitignored: { "<token>": "<user_id>", ... }
 MODEL = os.getenv("ARIA_LIVE_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
 
-# Guest front-of-house prompt: only the capabilities a guest actually has.
-SYSTEM = ("You are Aria, talking with a guest out loud — keep replies short, warm, and "
-          "natural, never an essay or markdown. You can remember things about THIS person "
-          "and look things up. For anything needing your memory of them, the web, or the "
-          "weather, call escalate_to_aria with their request and speak back the result. You "
-          "do NOT have email, calendar, contacts, or any personal accounts — if asked, say "
-          "you can't in this demo. Remember what they tell you so it feels personal.")
+# Guest front-of-house prompt: only the capabilities a guest actually has (personalized
+# with their name when we know it).
+def _system(name=None):
+    who = f" with {name}" if name else ""
+    use_name = f" Use {name}'s name naturally." if name else ""
+    return ("You are Aria, talking" + who + " out loud — keep replies short, warm, and "
+            "natural, never an essay or markdown." + use_name + " You can remember things "
+            "about THIS person, track their reminders/commitments, and look things up. For "
+            "anything needing your memory of them, their reminders, the web, or the weather, "
+            "call escalate_to_aria and speak back the result. You do NOT have email, calendar, "
+            "or any personal accounts — if asked, say you can't in this demo. Remember what "
+            "they tell you so it feels personal.")
+
+
 ESCALATE = types.Tool(function_declarations=[types.FunctionDeclaration(
     name="escalate_to_aria",
     description="Hand a request to Aria's brain: the guest's own memory, web search, or weather.",
@@ -53,12 +60,13 @@ ESCALATE = types.Tool(function_declarations=[types.FunctionDeclaration(
         properties={"request": types.Schema(
             type=types.Type.STRING, description="the user's request in their own words")},
         required=["request"]))])
-LIVE_CONFIG = types.LiveConnectConfig(
-    response_modalities=["AUDIO"],
-    system_instruction=types.Content(parts=[types.Part(text=SYSTEM)]),
-    tools=[ESCALATE],
-    input_audio_transcription={},
-    output_audio_transcription={})
+def _live_config(name=None):
+    return types.LiveConnectConfig(
+        response_modalities=["AUDIO"],
+        system_instruction=types.Content(parts=[types.Part(text=_system(name))]),
+        tools=[ESCALATE],
+        input_audio_transcription={},
+        output_audio_transcription={})
 
 app = FastAPI()
 _genai = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -80,13 +88,21 @@ def _friends() -> dict:
         return {}
 
 
-def _user_for(token: str) -> str:
-    """Resolve an invite token to a user_id, or 403 — keeps it invite-only so strangers
-    can't run up your Gemini/Claude bill."""
-    uid = _friends().get((token or "").strip())
-    if not uid:
+def _resolve(token: str):
+    """(user_id, display_name) for an invite token, or 403. Accepts the new
+    {token: {"id","name"}} record and the legacy {token: "user_id"} string."""
+    v = _friends().get((token or "").strip())
+    if not v:
         raise HTTPException(status_code=403, detail="Invalid or missing invite link.")
-    return uid
+    if isinstance(v, dict):
+        return (v.get("id") or v.get("user_id")), v.get("name")
+    return v, None
+
+
+def _user_for(token: str) -> str:
+    """Resolve an invite token to a user_id, or 403 (invite-only so strangers can't run up
+    your Gemini/Claude bill)."""
+    return _resolve(token)[0]
 
 
 @app.get("/")
@@ -112,12 +128,12 @@ def icon():
 @app.get("/live-token")
 def live_token(t: str = ""):
     """Mint a single-use ephemeral Live token — invite-gated so only friends can connect."""
-    uid = _user_for(t)
+    uid, name = _resolve(t)
     if not usage.check_and_increment(uid, "tokens"):
         raise HTTPException(status_code=429, detail="Daily voice limit reached — try again tomorrow.")
     tok = _genai.auth_tokens.create(config=types.CreateAuthTokenConfig(
         uses=1,
-        live_connect_constraints=types.LiveConnectConstraints(model=MODEL, config=LIVE_CONFIG),
+        live_connect_constraints=types.LiveConnectConstraints(model=MODEL, config=_live_config(name)),
         http_options=types.HttpOptions(api_version="v1alpha")))
     return {"token": tok.name, "model": MODEL}
 
@@ -130,10 +146,10 @@ class AgentReq(BaseModel):
 @app.post("/agent")
 def agent(req: AgentReq):
     """Run the guest brain for one escalated request — isolated to this friend's memory."""
-    uid = _user_for(req.token)
+    uid, name = _resolve(req.token)
     if not usage.check_and_increment(uid, "agent"):
         return {"result": "You've hit today's limit with me — let's pick this up tomorrow."}
-    ctx = tenant.set_current_user(uid)       # routes memory + guest mode for this request
+    ctx = tenant.set_current_user(uid, name)  # routes memory + guest mode + name for this request
     try:
         result = _agent_instance().invoke(
             {"messages": [HumanMessage(content=req.request)]},

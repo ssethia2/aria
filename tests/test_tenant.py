@@ -41,13 +41,14 @@ class TestTenantContext(unittest.TestCase):
 class TestGuestToolset(unittest.TestCase):
     def test_guest_excludes_account_tools(self):
         names = {t.name for t in agent_core.build_tools(guest=True)}
-        for keep in ("add_memory", "search_memory", "web_search", "fetch_webpage", "get_weather"):
-            self.assertIn(keep, names)
+        for keep in ("add_memory", "search_memory", "web_search", "fetch_webpage", "get_weather",
+                     "add_commitment", "list_commitments", "complete_commitment", "drop_commitment"):
+            self.assertIn(keep, names)   # isolated per-user tools
         for forbidden in ("read_email_thread", "read_and_summarize_emails", "draft_email_reply",
                           "get_calendar_events", "create_calendar_event", "list_people",
                           "play_music", "control_light", "check_packages", "get_system_status",
-                          "browse_and_report", "add_commitment", "create_note", "read_cold_storage"):
-            self.assertNotIn(forbidden, names)
+                          "browse_and_report", "analyze_commitments", "create_note", "read_cold_storage"):
+            self.assertNotIn(forbidden, names)   # owner accounts / shared data
 
     def test_owner_toolset_is_full(self):
         names = {t.name for t in agent_core.build_tools(guest=False)}
@@ -92,6 +93,50 @@ class TestGuestMemoryIsolation(unittest.TestCase):
     def test_guest_profile_is_empty(self):
         with _GuestCtx("bob"):
             self.assertEqual(memory.load_profile(), {})
+
+
+class TestGuestName(unittest.TestCase):
+    def test_name_in_context_and_banner(self):
+        tok = tenant.set_current_user("alice", "Alice")
+        try:
+            self.assertEqual(tenant.get_current_name(), "Alice")
+            banner = agent_core.build_system_message().content[0]['text']
+            self.assertIn("GUEST MODE", banner)
+            self.assertIn("Alice", banner)
+        finally:
+            tenant.reset_current_user(tok)
+        self.assertIsNone(tenant.get_current_name())   # cleared after
+
+
+class TestGuestCommitmentIsolation(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from skills import commitment_manager as cm
+        self.cm = cm
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False); self.tmp.close()
+        self._p = patch.object(cm, "DB_PATH", self.tmp.name); self._p.start()
+        cm.init_db()
+
+    def tearDown(self):
+        import os
+        self._p.stop(); os.unlink(self.tmp.name)
+
+    def test_each_user_sees_only_their_own(self):
+        cm = self.cm
+        cm.add("owner task", due_date="2026-07-01")              # owner (no context)
+        with _GuestCtx("alice"):
+            cm.add("alice task", due_date="2026-07-01")
+            self.assertEqual([c["description"] for c in cm.get_open_commitments()], ["alice task"])
+        with _GuestCtx("bob"):
+            self.assertEqual(cm.get_open_commitments(), [])      # bob sees nothing of alice's
+        self.assertEqual([c["description"] for c in cm.get_open_commitments()], ["owner task"])
+
+    def test_guest_cannot_complete_owner_commitment(self):
+        cm = self.cm
+        cid = cm.add("owner only", due_date="2026-07-01")        # owner row
+        with _GuestCtx("alice"):
+            self.assertIsNone(cm.complete(cid))                  # can't touch owner's
+        self.assertEqual(len(cm.get_open_commitments()), 1)      # still open for owner
 
 
 if __name__ == '__main__':

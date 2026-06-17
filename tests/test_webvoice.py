@@ -59,6 +59,22 @@ class TestWebvoiceAuth(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("limit", r.json()["result"].lower())
 
+    def test_name_record_threads_name_into_context(self):
+        captured = {}
+
+        def fake_invoke(payload, config=None):
+            captured["name"] = tenant.get_current_name()
+            captured["user"] = tenant.get_current_user()
+            return {"messages": [MagicMock(content="ok")]}
+
+        agent = MagicMock(); agent.invoke = fake_invoke
+        with patch.object(server, "_friends", return_value={"tk": {"id": "alice", "name": "Alice"}}), \
+             patch.object(server, "_agent_instance", return_value=agent):
+            r = self.client.post("/agent", json={"request": "hi", "token": "tk"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(captured["user"], "alice")
+        self.assertEqual(captured["name"], "Alice")
+
     def test_user_for_resolves_and_raises(self):
         with patch.object(server, "_friends", return_value={"t": "bob"}):
             self.assertEqual(server._user_for("t"), "bob")
