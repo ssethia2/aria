@@ -10,10 +10,12 @@ import os
 import uuid
 import chromadb
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from dotenv import load_dotenv
 
-from tenant import is_guest, get_current_user, safe_id
+from tenant import (is_guest, get_current_user, safe_id, reset_current_user,
+                    scope_from_config as _tenant_scope)
 
 load_dotenv()
 
@@ -71,11 +73,7 @@ def _guest_collection():
         return None
     return chroma_client.get_or_create_collection(name=f"mem_{safe_id(get_current_user())}")
 
-@tool
-def add_memory(fact: str) -> str:
-    """Use this tool to add a new memory, fact, preference, or event about the user.
-    Provide a clear, detailed sentence (e.g., 'Satvik hates newsletters', 'Satvik is traveling to NY in July').
-    """
+def _add_memory(fact: str) -> str:
     if is_guest():
         # Guests write straight into their own isolated collection (no shared scratchpad,
         # no compaction job — those are owner-only).
@@ -96,11 +94,22 @@ def add_memory(fact: str) -> str:
     except Exception as e:
         return f"Failed to add memory: {str(e)}"
 
+
 @tool
-def search_memory(query: str, n_results: int = 3) -> str:
-    """Use this tool to search the user's semantic memory for relevant facts or past events.
-    Provide a search query (e.g., 'Does Satvik like coffee?', 'travel plans').
+def add_memory(fact: str, config: RunnableConfig = None) -> str:
+    """Use this tool to add a new memory, fact, preference, or event about the user.
+    Provide a clear, detailed sentence (e.g., 'Satvik hates newsletters', 'Satvik is traveling to NY in July').
     """
+    tok, refusal = _tenant_scope(config)
+    if refusal:
+        return refusal
+    try:
+        return _add_memory(fact)
+    finally:
+        if tok:
+            reset_current_user(tok)
+
+def _search_memory(query: str, n_results: int = 3) -> str:
     if is_guest():
         # Query ONLY this guest's collection — never the owner's scratchpad/collection.
         col = _guest_collection()
@@ -145,8 +154,23 @@ def search_memory(query: str, n_results: int = 3) -> str:
             
     if not output:
         return "No relevant memories found."
-        
+
     return "\n".join(output)
+
+
+@tool
+def search_memory(query: str, n_results: int = 3, config: RunnableConfig = None) -> str:
+    """Use this tool to search the user's semantic memory for relevant facts or past events.
+    Provide a search query (e.g., 'Does Satvik like coffee?', 'travel plans').
+    """
+    tok, refusal = _tenant_scope(config)
+    if refusal:
+        return refusal
+    try:
+        return _search_memory(query, n_results)
+    finally:
+        if tok:
+            reset_current_user(tok)
 
 @tool
 def read_cold_storage(filename: str) -> str:

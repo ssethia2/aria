@@ -48,6 +48,26 @@ def is_guest() -> bool:
     return _current_user.get() is not None
 
 
+def tenant_from_config(config):
+    """(user_id, is_guest) from a LangChain run config's `configurable`. Config is the
+    RELIABLE carrier (LangChain propagates it across threads), so tenant-aware tools read
+    it from here and fail closed — never falling back to owner data — when a guest call
+    arrives without a tenant."""
+    cfg = (config or {}).get("configurable", {}) or {}
+    return cfg.get("tenant"), bool(cfg.get("guest"))
+
+
+def scope_from_config(config):
+    """Establish the tenant for a tool call from the run config (the reliable carrier),
+    fail-closed. Returns (token_or_None, refusal_or_None): on a refusal the caller MUST stop
+    (a guest call we can't attribute — never serve owner/other data); otherwise reset the
+    token (if any) in a finally."""
+    uid, guest = tenant_from_config(config)
+    if guest and not uid:
+        return None, "I couldn't identify your session, so I won't read or write your data."
+    return (set_current_user(uid) if uid else None), None
+
+
 def safe_id(user_id: str) -> str:
     """A ChromaDB-safe collection suffix for a user id (alphanumerics + underscore)."""
     return re.sub(r"[^a-zA-Z0-9]", "_", str(user_id))[:48] or "anon"

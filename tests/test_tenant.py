@@ -139,5 +139,46 @@ class TestGuestCommitmentIsolation(unittest.TestCase):
         self.assertEqual(len(cm.get_open_commitments()), 1)      # still open for owner
 
 
+class TestConfigScopeFailClosed(unittest.TestCase):
+    """The run config — not the contextvar — is the reliable tenant carrier across thread
+    boundaries. Tools read it via scope_from_config and FAIL CLOSED: a guest call we can't
+    attribute refuses rather than falling back to owner data."""
+
+    def _cfg(self, **configurable):
+        return {"configurable": configurable}
+
+    def test_guest_without_tenant_refuses(self):
+        # guest=True but no tenant id → we can't attribute it → refuse, never serve owner data
+        tok, refusal = tenant.scope_from_config(self._cfg(guest=True))
+        self.assertIsNone(tok)
+        self.assertIsNotNone(refusal)
+
+    def test_owner_call_has_no_tenant_and_no_refusal(self):
+        tok, refusal = tenant.scope_from_config(self._cfg())   # owner: no guest, no tenant
+        self.assertIsNone(tok)
+        self.assertIsNone(refusal)
+
+    def test_guest_with_tenant_scopes_to_that_user(self):
+        tok, refusal = tenant.scope_from_config(self._cfg(guest=True, tenant="alice"))
+        self.assertIsNone(refusal)
+        self.assertEqual(tenant.get_current_user(), "alice")
+        tenant.reset_current_user(tok)
+        self.assertFalse(tenant.is_guest())
+
+    def test_commitment_tool_refuses_on_unattributed_guest(self):
+        from skills import commitment_manager as cm
+        # list_commitments via .invoke threads config into the tool; no tenant → refusal,
+        # and crucially it never reaches the DB / owner rows.
+        with patch.object(cm, "get_open_commitments") as owner_query:
+            out = cm.list_commitments.invoke(
+                {"include_upcoming_only": False}, config=self._cfg(guest=True))
+        self.assertIn("session", out.lower())
+        owner_query.assert_not_called()
+
+    def test_memory_tool_refuses_on_unattributed_guest(self):
+        out = memory.add_memory.invoke({"fact": "x"}, config={"configurable": {"guest": True}})
+        self.assertIn("session", out.lower())
+
+
 if __name__ == '__main__':
     unittest.main()

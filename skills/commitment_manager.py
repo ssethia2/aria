@@ -18,8 +18,9 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
 
-from tenant import get_current_user
+from tenant import get_current_user, scope_from_config, reset_current_user
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'aria_calendar.db')
 
@@ -356,7 +357,7 @@ def format_line(c, today=None):
 @tool
 def add_commitment(description: str, kind: str = 'promise', who: str = None,
                    due_date_iso: str = None, due_time: str = None,
-                   recurrence: str = None) -> str:
+                   recurrence: str = None, config: RunnableConfig = None) -> str:
     """Track something the user has committed to or must not forget. BE PROACTIVE:
     when the user mentions a promise, a deadline, someone's birthday, a reply owed, or
     asks to be reminded of something repeatedly — even in passing — track it.
@@ -375,63 +376,91 @@ def add_commitment(description: str, kind: str = 'promise', who: str = None,
             (e.g. 'every_3_days'). Use 'yearly' for birthdays. A weekly check-in =
             recurrence='weekly' with due_date_iso set to the first one.
     """
-    if due_date_iso:
-        try:
-            datetime.strptime(due_date_iso, '%Y-%m-%d')
-        except ValueError:
-            return f"Error: due_date_iso must be YYYY-MM-DD, got {due_date_iso}."
-    if due_time:
-        try:
-            datetime.strptime(due_time, '%H:%M')
-        except ValueError:
-            return f"Error: due_time must be HH:MM (24h), got {due_time}."
-    rec = normalize_recurrence(recurrence)
-    if recurrence and not rec:
-        return (f"Error: recurrence must be daily/weekly/monthly/yearly/every_N_days, "
-                f"got {recurrence!r}.")
-    if rec and not due_date_iso:
-        return "Error: a recurring reminder needs a first due_date_iso."
-    cid = add(description, kind=kind, who=who, due_date=due_date_iso, due_time=due_time,
-              recurring=rec)
-    when = f" for {due_date_iso}{' ' + due_time if due_time else ''}" if due_date_iso else ""
-    rec_note = f", repeating {rec.replace('_', ' ')}" if rec else ""
-    return f"Tracked commitment #{cid}: '{description}'{when}{rec_note}."
+    tok, refusal = scope_from_config(config)
+    if refusal:
+        return refusal
+    try:
+        if due_date_iso:
+            try:
+                datetime.strptime(due_date_iso, '%Y-%m-%d')
+            except ValueError:
+                return f"Error: due_date_iso must be YYYY-MM-DD, got {due_date_iso}."
+        if due_time:
+            try:
+                datetime.strptime(due_time, '%H:%M')
+            except ValueError:
+                return f"Error: due_time must be HH:MM (24h), got {due_time}."
+        rec = normalize_recurrence(recurrence)
+        if recurrence and not rec:
+            return (f"Error: recurrence must be daily/weekly/monthly/yearly/every_N_days, "
+                    f"got {recurrence!r}.")
+        if rec and not due_date_iso:
+            return "Error: a recurring reminder needs a first due_date_iso."
+        cid = add(description, kind=kind, who=who, due_date=due_date_iso, due_time=due_time,
+                  recurring=rec)
+        when = f" for {due_date_iso}{' ' + due_time if due_time else ''}" if due_date_iso else ""
+        rec_note = f", repeating {rec.replace('_', ' ')}" if rec else ""
+        return f"Tracked commitment #{cid}: '{description}'{when}{rec_note}."
+    finally:
+        if tok:
+            reset_current_user(tok)
 
 
 @tool
-def list_commitments(include_upcoming_only: bool = False) -> str:
+def list_commitments(include_upcoming_only: bool = False, config: RunnableConfig = None) -> str:
     """Show the user's open commitments. Use when they ask what they owe, what's
     pending, what's due, or what's on their plate.
 
     Args:
         include_upcoming_only: True to show only items due in the next 7 days.
     """
-    items = get_upcoming_commitments() + get_due_commitments() if include_upcoming_only \
-        else get_open_commitments()
-    if not items:
-        return "No open commitments — all clear."
-    seen, lines = set(), []
-    for c in sorted(items, key=lambda x: (x['due_date'] is None, x['due_date'] or '', x['id'])):
-        if c['id'] in seen:
-            continue
-        seen.add(c['id'])
-        lines.append(format_line(c))
-    return "Open commitments:\n" + "\n".join(lines)
+    tok, refusal = scope_from_config(config)
+    if refusal:
+        return refusal
+    try:
+        items = get_upcoming_commitments() + get_due_commitments() if include_upcoming_only \
+            else get_open_commitments()
+        if not items:
+            return "No open commitments — all clear."
+        seen, lines = set(), []
+        for c in sorted(items, key=lambda x: (x['due_date'] is None, x['due_date'] or '', x['id'])):
+            if c['id'] in seen:
+                continue
+            seen.add(c['id'])
+            lines.append(format_line(c))
+        return "Open commitments:\n" + "\n".join(lines)
+    finally:
+        if tok:
+            reset_current_user(tok)
 
 
 @tool
-def complete_commitment(commitment_id: int) -> str:
+def complete_commitment(commitment_id: int, config: RunnableConfig = None) -> str:
     """Mark a commitment as done when the user says they did it. Use the #id from
     list_commitments. Yearly dates (birthdays) roll to next year automatically."""
-    result = complete(commitment_id)
-    return result or f"No open commitment with id {commitment_id}."
+    tok, refusal = scope_from_config(config)
+    if refusal:
+        return refusal
+    try:
+        result = complete(commitment_id)
+        return result or f"No open commitment with id {commitment_id}."
+    finally:
+        if tok:
+            reset_current_user(tok)
 
 
 @tool
-def drop_commitment(commitment_id: int) -> str:
+def drop_commitment(commitment_id: int, config: RunnableConfig = None) -> str:
     """Drop a commitment the user no longer intends to do (without marking it done)."""
-    return (f"Dropped commitment #{commitment_id}." if drop(commitment_id)
-            else f"No open commitment with id {commitment_id}.")
+    tok, refusal = scope_from_config(config)
+    if refusal:
+        return refusal
+    try:
+        return (f"Dropped commitment #{commitment_id}." if drop(commitment_id)
+                else f"No open commitment with id {commitment_id}.")
+    finally:
+        if tok:
+            reset_current_user(tok)
 
 
 def commitment_patterns(today=None) -> dict:

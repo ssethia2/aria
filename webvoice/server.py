@@ -149,11 +149,15 @@ def agent(req: AgentReq):
     uid, name = _resolve(req.token)
     if not usage.check_and_increment(uid, "agent"):
         return {"result": "You've hit today's limit with me — let's pick this up tomorrow."}
-    ctx = tenant.set_current_user(uid, name)  # routes memory + guest mode + name for this request
+    ctx = tenant.set_current_user(uid, name)  # contextvar: drives guest-mode prompt + name
     try:
+        # The run config is the RELIABLE tenant carrier — data tools read it (not the
+        # contextvar) and fail closed, so a friend's data can't leak even if context
+        # propagation ever breaks across a thread boundary.
+        cfg = thread_config(f"guest-{tenant.safe_id(uid)}")
+        cfg["configurable"].update(tenant=uid, guest=True)
         result = _agent_instance().invoke(
-            {"messages": [HumanMessage(content=req.request)]},
-            config=thread_config(f"guest-{tenant.safe_id(uid)}"))
+            {"messages": [HumanMessage(content=req.request)]}, config=cfg)
         return {"result": extract_text(result["messages"][-1].content)}
     except Exception as e:
         return {"result": f"Sorry, I hit an error. ({e})"}
