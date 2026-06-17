@@ -637,6 +637,104 @@ Return ONLY JSON (no markdown):
         return out
 
 
+class WeeklyReflectionMonitor(Monitor):
+    """Longer-horizon reflection. Once a week (Sunday evening) it looks across the DURABLE
+    signal — patterns in the commitment history + recent long-term memory — and surfaces ONE
+    warm 'here's what I noticed this week' note, plus optionally one durable standing-rule
+    proposal. Where the daily ReflectionMonitor sees only today, this catches patterns that
+    only emerge over weeks. Propose-only; silent by default.
+    """
+
+    PROMPT = """You are Aria reflecting on the PAST WEEK to help this user better. Below is the
+durable signal — patterns in their commitments and recent long-term memory. Optionally write
+ONE short, warm observation worth sharing (a trend, a recurring slip, something shifting) —
+the kind a thoughtful chief-of-staff notices over time. And optionally ONE durable standing
+rule worth adopting. Default to little: skip the rule unless clearly useful and general; skip
+the note unless something is genuinely worth saying. Never restate raw data.
+
+EXISTING STANDING RULES (don't duplicate):
+{existing}
+
+THIS WEEK'S SIGNAL:
+{context}
+
+Return ONLY JSON (no markdown):
+{{"note": "<one warm sentence, or empty>", "rule": "<imperative rule sentence, or empty>"}}"""
+
+    def __init__(self, interval_seconds=3600, now_fn=None):
+        super().__init__(name="weekly_reflection", interval_seconds=interval_seconds)
+        self.now_fn = now_fn or datetime.now
+
+    def _signal(self) -> str:
+        parts = []
+        try:
+            from skills.commitment_manager import commitment_patterns
+            findings = commitment_patterns().get("findings") or []
+            if findings:
+                parts.append("COMMITMENT PATTERNS:\n" + "\n".join(f"- {f}" for f in findings))
+        except Exception as e:
+            print(f"[weekly] commitments gather failed: {e}")
+        try:
+            import memory
+            cs = os.path.join(os.path.dirname(memory.__file__), "cold_storage")
+            files = sorted(f for f in os.listdir(cs)) if os.path.isdir(cs) else []
+            if files:
+                with open(os.path.join(cs, files[-1])) as fh:
+                    parts.append("RECENT LONG-TERM MEMORY:\n" + fh.read()[-2000:])
+        except Exception as e:
+            print(f"[weekly] memory gather failed: {e}")
+        return "\n\n".join(parts)
+
+    def check(self, state: dict) -> list:
+        now = self.now_fn()
+        if now.weekday() != 6 or now.hour < 18:     # Sunday evening
+            return []
+        week = now.strftime('%Y-%U')
+        if state.get("last_week") == week:
+            return []
+        context = self._signal()
+        if not context.strip():
+            state["last_week"] = week
+            return []
+        try:
+            from instructions import render_for_prompt
+            existing = render_for_prompt() or "(none)"
+        except Exception:
+            existing = "(none)"
+
+        from llm_router import get_llm
+        try:
+            resp = get_llm(temperature=0).invoke(
+                self.PROMPT.format(existing=existing, context=context))
+        except Exception as e:
+            print(f"[weekly] llm failed: {e}")
+            return []
+        content = resp.content
+        if isinstance(content, list):
+            content = next((b['text'] for b in content
+                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        try:
+            verdict = _parse_llm_json(content)
+        except Exception:
+            print(f"[weekly] unparseable: {content[:160]}")
+            return []
+
+        state["last_week"] = week
+        out = []
+        note = (verdict.get("note") or "").strip()
+        if note:
+            out.append(Notification("🗓️ Looking back on the week — " + note))
+        rule = (verdict.get("rule") or "").strip()
+        recent = state.get("recent", [])
+        if rule and rule not in recent:
+            recent.append(rule)
+            out.append(Notification(
+                "🧠 A pattern worth a standing rule?\n"
+                f"  “{rule}”\nReply yes to adopt it, or just ignore."))
+        state["recent"] = recent[-8:]
+        return out
+
+
 class NetflixMonitor(Monitor):
     """Acts the moment a household-update email lands; the *report* can wait.
 
@@ -743,8 +841,8 @@ class ProactiveEngine:
 def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
     return ProactiveEngine(
         monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(),
-                  InsightMonitor(), ReflectionMonitor(), ReplyResolveMonitor(),
-                  NetflixMonitor(), HealthMonitor(), HeartbeatMonitor()],
+                  InsightMonitor(), ReflectionMonitor(), WeeklyReflectionMonitor(),
+                  ReplyResolveMonitor(), NetflixMonitor(), HealthMonitor(), HeartbeatMonitor()],
         notify_fn=notify_fn,
     )
 
