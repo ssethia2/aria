@@ -498,5 +498,43 @@ class TestReflectionMonitor(unittest.TestCase):
         self.assertEqual(notes, [])
 
 
+class TestWeeklyReflectionMonitor(unittest.TestCase):
+    def _llm(self, payload):
+        resp = MagicMock(); resp.content = payload
+        llm = MagicMock(); llm.invoke.return_value = resp
+        return patch('llm_router.get_llm', return_value=llm)
+
+    def _sunday_eve(self):
+        return datetime(2026, 6, 21, 19, 0)   # a Sunday, 7pm
+
+    def test_surfaces_note_and_rule_on_sunday_evening(self):
+        from engine import WeeklyReflectionMonitor
+        mon = WeeklyReflectionMonitor(now_fn=self._sunday_eve)
+        with patch.object(WeeklyReflectionMonitor, '_signal',
+                          return_value="COMMITMENT PATTERNS:\n- replies to Diane keep slipping"), \
+             patch('instructions.render_for_prompt', return_value=""), \
+             self._llm('{"note": "your replies keep slipping midweek", "rule": "Chase reply-owed items after 2 days."}'):
+            notes = mon.check({})
+        self.assertEqual(len(notes), 2)                    # the note + the rule proposal
+        self.assertIn("week", notes[0].text.lower())
+        self.assertIn("standing rule", notes[1].text.lower())
+
+    def test_silent_when_not_sunday(self):
+        from engine import WeeklyReflectionMonitor
+        mon = WeeklyReflectionMonitor(now_fn=lambda: datetime(2026, 6, 17, 19, 0))  # Wednesday
+        self.assertEqual(mon.check({}), [])
+
+    def test_once_per_week(self):
+        from engine import WeeklyReflectionMonitor
+        mon = WeeklyReflectionMonitor(now_fn=self._sunday_eve)
+        self.assertEqual(mon.check({"last_week": datetime(2026, 6, 21).strftime('%Y-%U')}), [])
+
+    def test_empty_signal_is_silent(self):
+        from engine import WeeklyReflectionMonitor
+        mon = WeeklyReflectionMonitor(now_fn=self._sunday_eve)
+        with patch.object(WeeklyReflectionMonitor, '_signal', return_value=""):
+            self.assertEqual(mon.check({}), [])
+
+
 if __name__ == '__main__':
     unittest.main()
