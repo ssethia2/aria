@@ -17,6 +17,7 @@ pulling this change. The shared calendar's id lives in calendar_config.json
 import json
 import os
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -76,7 +77,60 @@ def _event_body(title, date_iso, start_time=None, end_time=None, description=Non
     return body
 
 
+def _gcal_link(title, date_iso, start_time=None, end_time=None, description=None,
+               location=None) -> str:
+    """A Google Calendar 'add event' template URL the user taps to add the event to
+    THEIR OWN calendar — no OAuth, no token, lands in whatever account they're signed
+    into. Used for guests (Path A): Aria never touches their calendar credentials.
+    Naive times are interpreted in the user's own Google Calendar timezone."""
+    if start_time:
+        start_dt = datetime.fromisoformat(f"{date_iso}T{start_time}:00")
+        end_dt = (datetime.fromisoformat(f"{date_iso}T{end_time}:00") if end_time
+                  else start_dt + timedelta(hours=1))
+        dates = f"{start_dt.strftime('%Y%m%dT%H%M%S')}/{end_dt.strftime('%Y%m%dT%H%M%S')}"
+    else:  # all-day: end date is exclusive (next day)
+        end = (datetime.fromisoformat(date_iso) + timedelta(days=1)).strftime('%Y%m%d')
+        dates = f"{date_iso.replace('-', '')}/{end}"
+    params = {'action': 'TEMPLATE', 'text': title, 'dates': dates}
+    if description:
+        params['details'] = description
+    if location:
+        params['location'] = location
+    return "https://calendar.google.com/calendar/render?" + urlencode(params)
+
+
 # --- Agent tools ---
+
+@tool
+def add_to_calendar(title: str, date_iso: str, start_time: str = None,
+                    end_time: str = None, description: str = None,
+                    location: str = None) -> str:
+    """Give the user a tap-to-add Google Calendar link for an event. Use this when they
+    want something on their calendar (appointment, dinner, flight, meeting) — reminders
+    and promises belong in add_commitment instead. The link adds the event to THEIR own
+    calendar when they tap it; share the link back to them.
+
+    Args:
+        title: Event title (e.g. "Dinner with Priya").
+        date_iso: Event date YYYY-MM-DD (compute from words like "Saturday").
+        start_time: HH:MM 24h. Omit for an all-day event.
+        end_time: HH:MM 24h. Defaults to one hour after start.
+        description: Optional details.
+        location: Optional location.
+    """
+    try:
+        datetime.strptime(date_iso, '%Y-%m-%d')
+        if start_time:
+            datetime.strptime(start_time, '%H:%M')
+        if end_time:
+            datetime.strptime(end_time, '%H:%M')
+    except ValueError as e:
+        return f"Error: bad date/time format ({e}). Use YYYY-MM-DD and HH:MM."
+    link = _gcal_link(title, date_iso, start_time, end_time, description, location)
+    when = date_iso + (f" {start_time}" + (f"–{end_time}" if end_time else "")
+                       if start_time else " (all day)")
+    return f"Here's a link to add '{title}' ({when}) to your calendar — tap it:\n{link}"
+
 
 @tool
 def list_my_calendars() -> str:

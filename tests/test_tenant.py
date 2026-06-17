@@ -46,8 +46,9 @@ class TestGuestToolset(unittest.TestCase):
     def test_guest_excludes_account_tools(self):
         names = {t.name for t in agent_core.build_tools(guest=True)}
         for keep in ("add_memory", "search_memory", "web_search", "fetch_webpage", "get_weather",
-                     "add_commitment", "list_commitments", "complete_commitment", "drop_commitment"):
-            self.assertIn(keep, names)   # isolated per-user tools
+                     "add_commitment", "list_commitments", "complete_commitment", "drop_commitment",
+                     "add_to_calendar"):
+            self.assertIn(keep, names)   # isolated per-user tools + tap-to-add calendar links
         for forbidden in ("read_email_thread", "read_and_summarize_emails", "draft_email_reply",
                           "get_calendar_events", "create_calendar_event", "list_people",
                           "play_music", "control_light", "check_packages", "get_system_status",
@@ -141,6 +142,31 @@ class TestGuestCommitmentIsolation(unittest.TestCase):
         with _GuestCtx("alice"):
             self.assertIsNone(cm.complete(cid))                  # can't touch owner's
         self.assertEqual(len(cm.get_open_commitments()), 1)      # still open for owner
+
+
+class TestGuestCalendarLink(unittest.TestCase):
+    """Path A: guests get a tap-to-add Google Calendar link — no OAuth, no Google call,
+    Aria never touches their calendar credentials."""
+
+    def test_timed_event_link_has_correct_dates_and_title(self):
+        from skills.google_calendar import add_to_calendar
+        out = add_to_calendar.invoke({"title": "Dinner with Priya", "date_iso": "2026-07-04",
+                                      "start_time": "19:00", "end_time": "20:30"})
+        self.assertIn("calendar.google.com/calendar/render", out)
+        self.assertIn("action=TEMPLATE", out)
+        self.assertIn("20260704T190000%2F20260704T203000", out)  # start/end, url-encoded
+        self.assertIn("Dinner+with+Priya", out)
+
+    def test_all_day_event_uses_exclusive_end_date(self):
+        from skills.google_calendar import add_to_calendar
+        out = add_to_calendar.invoke({"title": "Trip", "date_iso": "2026-07-04"})
+        self.assertIn("20260704%2F20260705", out)  # all-day end is next day (exclusive)
+
+    def test_bad_date_is_rejected_without_building_a_link(self):
+        from skills.google_calendar import add_to_calendar
+        out = add_to_calendar.invoke({"title": "x", "date_iso": "07/04/2026"})
+        self.assertIn("Error", out)
+        self.assertNotIn("http", out)
 
 
 class TestConfigScopeFailClosed(unittest.TestCase):

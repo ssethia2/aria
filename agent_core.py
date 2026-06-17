@@ -57,7 +57,8 @@ from skills.commitment_manager import (add_commitment, list_commitments,
                                        analyze_commitments)
 from skills.google_calendar import (create_calendar_event, get_calendar_events,
                                     list_my_calendars, configure_shared_calendar,
-                                    update_calendar_event, delete_calendar_event)
+                                    update_calendar_event, delete_calendar_event,
+                                    add_to_calendar)
 from instructions import (render_for_prompt, add_standing_instruction,
                           update_standing_instruction, remove_standing_instruction)
 
@@ -93,7 +94,8 @@ def build_tools(guest=False):
         # Per-user, isolated tools only — memory, their own commitments, and stateless
         # lookups. Nothing touching the owner's accounts/data.
         return [add_memory, search_memory, add_commitment, list_commitments,
-                complete_commitment, drop_commitment, get_weather, web_search, fetch_webpage]
+                complete_commitment, drop_commitment, add_to_calendar,
+                get_weather, web_search, fetch_webpage]
     return [
         add_memory,
         search_memory,
@@ -306,8 +308,10 @@ def build_system_message() -> SystemMessage:
         greeting = f"You're talking with {who}. " if who else ""
         stable = (f"GUEST MODE — {greeting}you are a personal demo of Aria for a guest user. "
                   "You have ONLY: your memory of THIS guest (add_memory / search_memory), their "
-                  "own reminders/commitments (add/list/complete/drop_commitment), web search, "
-                  "and weather. You do NOT have email, calendar, contacts, notes, music, smart-"
+                  "own reminders/commitments (add/list/complete/drop_commitment), tap-to-add "
+                  "calendar links (add_to_calendar — you hand them a link to add an event to "
+                  "their OWN calendar; you can't read or write their calendar directly), web "
+                  "search, and weather. You do NOT have email, contacts, notes, music, smart-"
                   "home, or anyone's accounts — if asked for those, say you can't in guest mode. "
                   "Be warm, use their name, and remember what they tell you.\n\n") + stable
     return SystemMessage(content=[
