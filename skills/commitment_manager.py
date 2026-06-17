@@ -20,16 +20,16 @@ from datetime import datetime, timedelta
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 
-from tenant import get_current_user, scope_from_config, reset_current_user
+from tenant import get_current_user, scope_from_config, reset_current_user, OWNER_ID
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'aria_calendar.db')
 
 
 def _scope():
-    """(SQL predicate, params) restricting commitments to the current tenant. The owner runs
-    with no tenant set → only their rows (tenant IS NULL); a guest sees only their own."""
-    uid = get_current_user()
-    return ("tenant = ?", [uid]) if uid is not None else ("tenant IS NULL", [])
+    """(SQL predicate, params) restricting commitments to the current principal. Uniform:
+    every row is keyed by its owner's user_id ("owner" for the owner, the guest id for a
+    guest), so this is the same predicate for everyone — no privileged unscoped path."""
+    return "tenant = ?", [get_current_user()]
 
 VALID_KINDS = {'reply_owed', 'deadline', 'people_date', 'promise'}
 
@@ -63,6 +63,9 @@ def init_db():
     cols = [r[1] for r in cursor.execute("PRAGMA table_info(commitments)").fetchall()]
     if 'tenant' not in cols:
         cursor.execute("ALTER TABLE commitments ADD COLUMN tenant TEXT")
+    # Uniform principals: the owner is now tenant "owner" (was the implicit NULL tenant).
+    # Idempotent — only the legacy unkeyed owner rows match.
+    cursor.execute("UPDATE commitments SET tenant = ? WHERE tenant IS NULL", (OWNER_ID,))
     # One-time migration: legacy reminders (calendar_manager) become promises.
     cursor.execute("SELECT COUNT(*) FROM commitments")
     if cursor.fetchone()[0] == 0:
@@ -70,9 +73,10 @@ def init_db():
             cursor.execute("SELECT task, target_date, created_at FROM reminders WHERE completed = 0")
             for task, target_date, created_at in cursor.fetchall():
                 cursor.execute('''
-                    INSERT INTO commitments (description, kind, due_date, status, source, created_at)
-                    VALUES (?, 'promise', ?, 'open', 'migrated', ?)
-                ''', (task, target_date, created_at))
+                    INSERT INTO commitments (description, kind, due_date, status, source,
+                                             created_at, tenant)
+                    VALUES (?, 'promise', ?, 'open', 'migrated', ?, ?)
+                ''', (task, target_date, created_at, OWNER_ID))
         except sqlite3.OperationalError:
             pass  # no legacy table — fresh install
     conn.commit()

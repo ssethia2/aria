@@ -24,14 +24,18 @@ class _GuestCtx:
 
 class TestTenantContext(unittest.TestCase):
     def test_default_is_owner(self):
-        self.assertIsNone(tenant.get_current_user())
+        # The owner is a real principal ("owner"/owner role), not the absence of one.
+        self.assertEqual(tenant.get_current_user(), tenant.OWNER_ID)
+        self.assertTrue(tenant.is_owner())
         self.assertFalse(tenant.is_guest())
 
     def test_set_and_reset(self):
         with _GuestCtx("alice"):
             self.assertEqual(tenant.get_current_user(), "alice")
             self.assertTrue(tenant.is_guest())
-        self.assertFalse(tenant.is_guest())          # restored after the block
+            self.assertFalse(tenant.is_owner())
+        self.assertTrue(tenant.is_owner())           # owner principal restored after the block
+        self.assertFalse(tenant.is_guest())
 
     def test_safe_id(self):
         self.assertEqual(tenant.safe_id("alice@x.com"), "alice_x_com")
