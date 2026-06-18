@@ -1,0 +1,15 @@
+# Public HTTPS for the guest webvoice backend on a server WITH a public IP (e.g. AWS EC2).
+# Caddy auto-provisions a Let's Encrypt cert for the domain and reverse-proxies to the
+# uvicorn backend on localhost — so the backend itself never faces the internet, and you get
+# the HTTPS the browser mic (getUserMedia) requires, with zero cert management.
+#
+# Setup on the box:
+#   1. DNS: point an A record  ariaai.live -> <this server's public IP>.
+#   2. Open ports 80 + 443 in the EC2 security group (80 is for the ACME cert challenge).
+#   3. sudo apt install caddy   (or see https://caddyserver.com/docs/install)
+#   4. sudo cp webvoice/deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# Change the domain below if it isn't ariaai.live.
+
+ariaai.live {
+	reverse_proxy 127.0.0.1:8800
+}

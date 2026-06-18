@@ -1,5 +1,5 @@
 [Unit]
-Description=Aria webvoice HTTPS tunnel (stable public URL for phones)
+Description=Aria webvoice Cloudflare Tunnel (stable public URL for phones)
 After=network-online.target aria-webvoice.service
 Wants=network-online.target
 

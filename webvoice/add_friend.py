@@ -4,7 +4,7 @@ Generates a random invite token, maps it to a stable user_id (so their memory pe
 writes it to friends.json (gitignored), and prints the link to send them.
 
   python3 webvoice/add_friend.py "Alice"                      # uses a placeholder host
-  python3 webvoice/add_friend.py "Alice" https://aria.ngrok-free.app
+  python3 webvoice/add_friend.py "Alice" https://ariaai.live
 
 They open the link on their phone, tap Start, and talk. Add to Home Screen for an app icon.
 """

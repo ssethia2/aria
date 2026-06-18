@@ -17,8 +17,8 @@ weather — no email/calendar/contacts/etc.), in their **own** conversation thre
 never see your data or each other's. (You use telegram/`voice_live` for your full Aria.)
 
 ```bash
-python3 webvoice/add_friend.py "Alice" https://your-domain.ngrok-free.app
-# → Invite link: https://your-domain.ngrok-free.app/?t=<token>
+python3 webvoice/add_friend.py "Alice" https://ariaai.live
+# → Invite link: https://ariaai.live/?t=<token>
 ```
 Send that link. They open it, tap Start, and talk — Add to Home Screen for an app icon.
 Re-running for the same name reuses their token, so their memory persists. Tokens live in
@@ -34,17 +34,17 @@ Re-running for the same name reuses their token, so their memory persists. Token
 
 ## Use it on your phone (the easy way)
 
-One command starts the server **and** the HTTPS tunnel the phone needs:
+One command starts the server **and** an HTTPS tunnel the phone needs (HTTPS is required for
+the browser mic):
 ```bash
-export ARIA_NGROK_DOMAIN=your-name.ngrok-free.app   # see "stable URL" below
 webvoice/run.sh
 ```
-It prints a URL — open it on your iPhone, then **Share → Add to Home Screen**. That drops a
-tap-to-launch **Aria** icon that opens fullscreen, like a native app. Tap it, hit Start, talk.
+With nothing configured it spins up a throwaway `*.trycloudflare.com` URL — open it on your
+iPhone, then **Share → Add to Home Screen** for a tap-to-launch fullscreen **Aria** icon.
 
-**Stable URL (do this once):** reserve a free static domain at dashboard.ngrok.com → Domains,
-and set `ARIA_NGROK_DOMAIN` to it. Without it `run.sh` uses a random ngrok URL each run, so the
-home-screen icon would break — the reserved domain keeps it permanent.
+**Stable URL on your own domain:** for always-on hosting (so the home-screen icon keeps
+working), see [deploy/HOSTING.md](deploy/HOSTING.md) — EC2/VPS + Caddy if the box has a public
+IP, or a Cloudflare Tunnel (set `CLOUDFLARE_TUNNEL_TOKEN` in `.env`) for a home Pi/laptop.
 
 Desktop check: `webvoice/run.sh` without a domain, or just
 `uvicorn webvoice.server:app --port 8800` and open http://localhost:8800 (localhost allows mic
