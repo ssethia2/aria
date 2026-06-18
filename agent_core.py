@@ -166,6 +166,12 @@ a renewal, someone's birthday, or a reply they owe, capture it with `add_commitm
 (confirm briefly after; offer first only if you're unsure they want it tracked).
 Use `list_commitments` when they ask what they owe or what's pending; `complete_commitment`
 when they say something's done; `drop_commitment` when they no longer intend to do it.
+When they ask WHICH item, WHEN something is due, or WHAT TIME — or refer back to "that
+reminder"/"this one" — call `list_commitments` and answer ONLY from the rows it returns this
+turn, reading each item's due_date and due_time exactly. NEVER infer a commitment's date or
+time from earlier in the conversation (stale/partial chat is how dates and times get mixed
+up), and keep due_date (the day) and due_time (the clock time) distinct — a 4pm reminder due
+today is not "yesterday".
 Use kind='people_date' with recurrence='yearly' for birthdays, and recurrence
 ('daily'/'weekly'/'monthly'/'every_N_days') for anything they want REPEATED on a
 schedule ("remind me weekly to..."). Use due_time ONLY when they name a time of day.
@@ -377,14 +383,19 @@ def extract_text(content) -> str:
 # telegram, imessage, the guest web client — triages the same way: a cheap model answers
 # pure general-knowledge instantly and the expensive full agent is reserved for anything
 # touching the user's data, tools, or the live world.
-_QUICK_PROMPT = """You are Aria's fast front-line responder. Answer the user's message
-DIRECTLY and concisely ONLY if it's a general-knowledge, factual, definitional, how-to,
-calculation, or explanation question you can answer well from your own training knowledge.
+_QUICK_PROMPT = """You are Aria's fast front-line responder. Right now it is {now}.
+Answer the user's message DIRECTLY and concisely ONLY if it's a general-knowledge, factual,
+definitional, how-to, calculation, or explanation question you can answer well from your own
+training knowledge.
 
 Output EXACTLY the token ESCALATE (nothing else) if answering it would need ANY of:
 the user's personal data / memory / people, their email / calendar / notes / commitments /
-grocery list, real-time or current information (weather, news, prices, today's schedule),
-the web, a specific link, or any action/tool. When in doubt, ESCALATE.
+reminders / grocery list, real-time or current information (weather, news, prices, today's
+schedule), the web, a specific link, or any action/tool. ALSO escalate any follow-up that
+refers back to one of those — e.g. "which reminder is this?", "when is it?", "is that today?",
+"what time?", "which one?" — you see only a short chat snippet that may be stale or partial,
+so you must NEVER answer about the user's reminders/commitments/events/dates from it. When in
+doubt, ESCALATE.
 
 Recent conversation (for context, may be empty):
 {context}
@@ -409,7 +420,8 @@ def quick_answer(agent, thread_id, text):
 
     try:
         resp = get_llm(tier="light").invoke(
-            _QUICK_PROMPT.format(context=context or "(none)", text=text))
+            _QUICK_PROMPT.format(now=datetime.now().strftime('%A, %Y-%m-%d %H:%M'),
+                                 context=context or "(none)", text=text))
         ans = extract_text(resp.content).strip()
     except Exception as e:
         print(f"[quick] failed, escalating: {e}")

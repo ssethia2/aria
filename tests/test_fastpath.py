@@ -47,6 +47,16 @@ class TestQuickAnswer(unittest.TestCase):
         with patch('agent_core.get_llm', return_value=self._llm("   ")):
             self.assertIsNone(tb.quick_answer(agent, "c1", "x"))
 
+    def test_current_date_injected_into_prompt(self):
+        # The fast path must be date-anchored, or it confuses today/tomorrow/day-of-week.
+        from datetime import datetime
+        agent = _agent_with_history()
+        llm = self._llm("ESCALATE")
+        with patch('agent_core.get_llm', return_value=llm):
+            tb.quick_answer(agent, "c1", "what day is it?")
+        sent_prompt = llm.invoke.call_args[0][0]
+        self.assertIn(datetime.now().strftime('%Y-%m-%d'), sent_prompt)
+
 
 if __name__ == '__main__':
     unittest.main()
