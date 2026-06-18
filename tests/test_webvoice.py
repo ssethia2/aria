@@ -36,7 +36,10 @@ class TestWebvoiceAuth(unittest.TestCase):
 
         agent = MagicMock(); agent.invoke = fake_invoke
         with patch.object(server, "_friends", return_value={"tok-alice": "alice"}), \
-             patch.object(server, "_agent_instance", return_value=agent):
+             patch.object(server, "_agent_instance", return_value=agent), \
+             patch.object(server, "quick_answer", return_value=None), \
+             patch("webvoice.usage.allow", return_value=True), \
+             patch("webvoice.usage.record"):
             r = self.client.post("/agent", json={"request": "remember I like tea", "token": "tok-alice"})
 
         self.assertEqual(r.status_code, 200)
@@ -53,11 +56,27 @@ class TestWebvoiceAuth(unittest.TestCase):
         self.assertEqual(r.status_code, 429)
 
     def test_agent_over_daily_cap_returns_friendly_message(self):
+        # allow() False for every kind → quick path skipped, full-brain gate refuses.
         with patch.object(server, "_friends", return_value={"good": "alice"}), \
-             patch("webvoice.usage.check_and_increment", return_value=False):
+             patch("webvoice.usage.allow", return_value=False):
             r = self.client.post("/agent", json={"request": "hi", "token": "good"})
         self.assertEqual(r.status_code, 200)
         self.assertIn("limit", r.json()["result"].lower())
+
+    def test_text_uses_quick_path_and_skips_full_brain(self):
+        # A pure general-knowledge question is answered by the cheap light tier; the full
+        # (expensive) brain never runs, and the spend is charged as 'quick', not 'agent'.
+        brain = MagicMock()
+        brain.invoke.side_effect = AssertionError("full brain must not run on a quick hit")
+        with patch.object(server, "_friends", return_value={"tk": "alice"}), \
+             patch.object(server, "_agent_instance", return_value=brain), \
+             patch.object(server, "quick_answer", return_value="Paris."), \
+             patch("webvoice.usage.allow", return_value=True), \
+             patch("webvoice.usage.record") as rec:
+            r = self.client.post("/agent", json={"request": "capital of France?", "token": "tk"})
+        self.assertEqual(r.json()["result"], "Paris.")
+        rec.assert_called_once_with("alice", "quick")
+        brain.invoke.assert_not_called()
 
     def test_name_record_threads_name_into_context(self):
         captured = {}
@@ -69,7 +88,10 @@ class TestWebvoiceAuth(unittest.TestCase):
 
         agent = MagicMock(); agent.invoke = fake_invoke
         with patch.object(server, "_friends", return_value={"tk": {"id": "alice", "name": "Alice"}}), \
-             patch.object(server, "_agent_instance", return_value=agent):
+             patch.object(server, "_agent_instance", return_value=agent), \
+             patch.object(server, "quick_answer", return_value=None), \
+             patch("webvoice.usage.allow", return_value=True), \
+             patch("webvoice.usage.record"):
             r = self.client.post("/agent", json={"request": "hi", "token": "tk"})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(captured["user"], "alice")

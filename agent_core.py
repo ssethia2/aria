@@ -20,7 +20,7 @@ import sqlite3
 from datetime import datetime
 
 from langchain_core.tools import tool
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain.agents import create_agent
 from langchain.agents.middleware import dynamic_prompt, ModelRequest
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -371,3 +371,57 @@ def extract_text(content) -> str:
             str(content),
         )
     return content
+
+
+# Shared light-tier fast path. Lives here (not in one interface) so every text front-end —
+# telegram, imessage, the guest web client — triages the same way: a cheap model answers
+# pure general-knowledge instantly and the expensive full agent is reserved for anything
+# touching the user's data, tools, or the live world.
+_QUICK_PROMPT = """You are Aria's fast front-line responder. Answer the user's message
+DIRECTLY and concisely ONLY if it's a general-knowledge, factual, definitional, how-to,
+calculation, or explanation question you can answer well from your own training knowledge.
+
+Output EXACTLY the token ESCALATE (nothing else) if answering it would need ANY of:
+the user's personal data / memory / people, their email / calendar / notes / commitments /
+grocery list, real-time or current information (weather, news, prices, today's schedule),
+the web, a specific link, or any action/tool. When in doubt, ESCALATE.
+
+Recent conversation (for context, may be empty):
+{context}
+
+User: {text}"""
+
+
+def quick_answer(agent, thread_id, text):
+    """Light-tier fast path: a cheap model answers a pure general-knowledge question
+    instantly, skipping the full agent's tool machinery. Returns the answer, or None to
+    escalate to the full agent. On a hit it persists the turn to the checkpointed thread so
+    follow-ups stay consistent. Pure (no tools / no memory / no profile in its prompt), so
+    it's safe to run for guests — it can't touch anyone's data."""
+    cfg = thread_config(thread_id)
+    try:
+        recent = agent.get_state(cfg).values.get("messages", [])[-6:]
+        context = "\n".join(
+            f"{m.type}: {extract_text(m.content)[:300]}"
+            for m in recent if getattr(m, 'content', None))
+    except Exception:
+        context = ""
+
+    try:
+        resp = get_llm(tier="light").invoke(
+            _QUICK_PROMPT.format(context=context or "(none)", text=text))
+        ans = extract_text(resp.content).strip()
+    except Exception as e:
+        print(f"[quick] failed, escalating: {e}")
+        return None
+
+    if not ans or ans.upper().startswith("ESCALATE"):
+        return None
+    # Record the turn so the checkpointed conversation stays consistent for follow-ups.
+    try:
+        agent.update_state(cfg, {"messages": [HumanMessage(content=text),
+                                              AIMessage(content=ans)]})
+    except Exception as e:
+        print(f"[quick] couldn't persist turn: {e}")
+    print("[quick] answered without the full agent")
+    return ans

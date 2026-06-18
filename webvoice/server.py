@@ -30,7 +30,8 @@ from google.genai import types
 
 import tenant
 from webvoice import usage
-from agent_core import build_agent, open_checkpointer, thread_config, extract_text
+from agent_core import (build_agent, open_checkpointer, thread_config, extract_text,
+                        quick_answer)
 
 load_dotenv()
 
@@ -145,18 +146,33 @@ class AgentReq(BaseModel):
 
 @app.post("/agent")
 def agent(req: AgentReq):
-    """Run the guest brain for one escalated request — isolated to this friend's memory."""
+    """Answer one guest request — isolated to this friend's memory. Triages like the owner's
+    text path: a cheap light-tier model handles pure general-knowledge directly, and the full
+    (expensive) guest brain is reserved for anything touching their data/tools/the live world."""
     uid, name = _resolve(req.token)
-    if not usage.check_and_increment(uid, "agent"):
+    thread = f"guest-{tenant.safe_id(uid)}"
+    brain = _agent_instance()
+
+    # 1. Light-tier fast path (cheap). Pure — no tools/memory/profile — so it can't leak; it
+    #    just reads this friend's own thread for context and answers, or returns None.
+    if usage.allow(uid, "quick"):
+        ans = quick_answer(brain, thread, req.request)
+        if ans is not None:
+            usage.record(uid, "quick")
+            return {"result": ans}
+
+    # 2. Full guest brain (escalation) — gated on the agent count cap AND the $/day ceiling.
+    if not usage.allow(uid, "agent"):
         return {"result": "You've hit today's limit with me — let's pick this up tomorrow."}
+    usage.record(uid, "agent")
     ctx = tenant.set_current_user(uid, name)  # contextvar: drives guest-mode prompt + name
     try:
         # The run config is the RELIABLE tenant carrier — data tools read it (not the
         # contextvar) and fail closed, so a friend's data can't leak even if context
         # propagation ever breaks across a thread boundary.
-        cfg = thread_config(f"guest-{tenant.safe_id(uid)}")
+        cfg = thread_config(thread)
         cfg["configurable"].update(tenant=uid, guest=True)
-        result = _agent_instance().invoke(
+        result = brain.invoke(
             {"messages": [HumanMessage(content=req.request)]}, config=cfg)
         return {"result": extract_text(result["messages"][-1].content)}
     except Exception as e:

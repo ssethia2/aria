@@ -27,7 +27,8 @@ import time
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agent_core import build_agent, open_checkpointer, thread_config, extract_text
+from agent_core import (build_agent, open_checkpointer, thread_config, extract_text,
+                        quick_answer)
 from imessage_send import send_imessage
 from imessage_reader import latest_rowid, fetch_new
 
@@ -81,21 +82,6 @@ def _thread_id(handle: str) -> str:
     return f"imessage-{handle}"
 
 
-_QUICK_PROMPT = """You are Aria's fast front-line responder. Answer the user's message
-DIRECTLY and concisely ONLY if it's a general-knowledge, factual, definitional, how-to,
-calculation, or explanation question you can answer well from your own training knowledge.
-
-Output EXACTLY the token ESCALATE (nothing else) if answering it would need ANY of:
-the user's personal data / memory / people, their email / calendar / notes / commitments /
-grocery list, real-time or current information (weather, news, prices, today's schedule),
-the web, a specific link, or any action/tool. When in doubt, ESCALATE.
-
-Recent conversation (for context, may be empty):
-{context}
-
-User: {text}"""
-
-
 def repair_thread(agent, handle) -> int:
     """Neutralize dangling tool calls (a tool_use with no saved tool_result) in a handle's
     thread — they happen when the process is killed mid-turn and would otherwise 400 every
@@ -129,36 +115,6 @@ def repair_thread(agent, handle) -> int:
     return len(repairs)
 
 
-def quick_answer(agent, handle, text):
-    """Fast path: a lightweight model answers a pure general-knowledge question instantly,
-    skipping the full agent's tool machinery. Returns the answer, or None to escalate."""
-    cfg = thread_config(_thread_id(handle))
-    try:
-        recent = agent.get_state(cfg).values.get("messages", [])[-6:]
-        context = "\n".join(
-            f"{m.type}: {extract_text(m.content)[:300]}"
-            for m in recent if getattr(m, 'content', None))
-    except Exception:
-        context = ""
-
-    from llm_router import get_llm
-    try:
-        resp = get_llm(tier="light").invoke(
-            _QUICK_PROMPT.format(context=context or "(none)", text=text))
-        ans = extract_text(resp.content).strip()
-    except Exception as e:
-        print(f"[quick] failed, escalating: {e}")
-        return None
-
-    if not ans or ans.upper().startswith("ESCALATE"):
-        return None
-    try:
-        agent.update_state(cfg, {"messages": [HumanMessage(content=text),
-                                              AIMessage(content=ans)]})
-    except Exception as e:
-        print(f"[quick] couldn't persist turn: {e}")
-    print("[quick] answered without the full agent")
-    return ans
 
 
 def run_agent_streaming(agent, handle, text) -> str:
@@ -280,7 +236,7 @@ def main():
                 continue
 
             try:
-                reply = quick_answer(agent, handle, text)
+                reply = quick_answer(agent, _thread_id(handle), text)
                 if reply is None:
                     reply = run_agent_streaming(agent, handle, text)
             except Exception as e:
