@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 User={{USER}}
 WorkingDirectory={{APP_DIR}}
-# Bind to localhost only — the tunnel service exposes it publicly over HTTPS.
+# Bind to localhost only — Caddy (or the tunnel, on a no-public-IP host) fronts it over HTTPS.
 ExecStart={{APP_DIR}}/venv/bin/uvicorn webvoice.server:app --host 127.0.0.1 --port 8800
 Restart=always
 RestartSec=10
