@@ -67,3 +67,5 @@ profile.json
 # webvoice trial: friend invite tokens
 webvoice/friends.json
 webvoice/usage.json
+webvoice/push_subs.json
+webvoice/push_state.json

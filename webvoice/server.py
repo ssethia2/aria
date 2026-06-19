@@ -30,6 +30,7 @@ from google.genai import types
 
 import tenant
 from webvoice import usage
+from webvoice import push
 from agent_core import (build_agent, open_checkpointer, thread_config, extract_text,
                         quick_answer)
 
@@ -160,6 +161,35 @@ def manifest():
 @app.get("/icon.png")
 def icon():
     return FileResponse(HERE / "icon.png", media_type="image/png")
+
+
+@app.get("/sw.js")
+def service_worker():
+    return FileResponse(HERE / "sw.js", media_type="application/javascript")
+
+
+@app.on_event("startup")
+def _start_push():
+    push.start_scheduler()      # no-op unless VAPID keys are configured
+
+
+@app.get("/push/key")
+def push_key():
+    """The VAPID public key the browser needs to subscribe (empty if push isn't configured)."""
+    return {"key": push.public_key()}
+
+
+class PushSub(BaseModel):
+    token: str = ""
+    subscription: dict
+
+
+@app.post("/push/subscribe")
+def push_subscribe(req: PushSub):
+    """Register a device's push subscription against its token's user (owner or guest)."""
+    uid = "owner" if _is_owner(req.token) else _resolve(req.token)[0]
+    push.add_subscription(uid, req.subscription)
+    return {"ok": True}
 
 
 @app.get("/live-token")

@@ -259,6 +259,7 @@ async function sendText(text) {
   text = text.trim();
   if (!text) return;
   if (!invite) { log("This link is missing its invite token.", "err"); return; }
+  setupPush();                       // register for reminder notifications on first send
   log("you: " + text, "you");
   $("send").disabled = true; $("msg").value = "";
   try {
@@ -281,7 +282,36 @@ $("composer").addEventListener("submit", (e) => { e.preventDefault(); sendText($
 document.querySelectorAll(".ex").forEach((b) =>
   b.addEventListener("click", () => sendText(b.textContent.trim())));
 
-$("start").addEventListener("click", start);
+// ---------- web push: so reminders actually ping the phone ----------
+// On iOS this only works once the app is Added to Home Screen (iOS 16.4+).
+let pushReady = false;
+function urlB64ToUint8(b64) {
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const s = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(s), arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+async function setupPush() {        // call from a user gesture (Start / Send)
+  if (pushReady || !invite) return;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+  pushReady = true;
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+    const { key } = await (await fetch("/push/key")).json();
+    if (!key) return;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      if ((await Notification.requestPermission()) !== "granted") { pushReady = false; return; }
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(key) });
+    }
+    await fetch("/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: invite, subscription: sub }) });
+    log("🔔 reminders will notify this device", "sys");
+  } catch (e) { pushReady = false; console.log("push setup failed", e); }
+}
+
+$("start").addEventListener("click", () => { setupPush(); start(); });
 </script>
 </body>
 </html>
