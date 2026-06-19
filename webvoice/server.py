@@ -38,6 +38,10 @@ load_dotenv()
 HERE = Path(__file__).resolve().parent
 FRIENDS_PATH = HERE / "friends.json"     # gitignored: { "<token>": "<user_id>", ... }
 MODEL = os.getenv("ARIA_LIVE_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+# OWNER MODE (off unless set): a secret token that unlocks the FULL agent (your real toolset
+# + memory, no guest sandbox) so you can test the PWA as yourself. Only set this where your
+# credentials live (your Mac) — NEVER on the public guest box.
+OWNER_TOKEN = os.getenv("ARIA_OWNER_TOKEN")
 
 # Guest front-of-house prompt: only the capabilities a guest actually has (personalized
 # with their name when we know it).
@@ -69,9 +73,28 @@ def _live_config(name=None):
         input_audio_transcription={},
         output_audio_transcription={})
 
+
+# OWNER front-of-house prompt: full capabilities (the real Aria reached via escalate).
+def _owner_system():
+    return ("You are Aria, talking with Satvik out loud — keep replies short, warm, and "
+            "natural, never an essay or markdown. You have FULL access to his life via "
+            "escalate_to_aria: email, calendar, reminders/commitments, notes, memory, the web, "
+            "weather, music, and smart home. For anything beyond casual chat, call "
+            "escalate_to_aria with his request and speak back the result.")
+
+
+def _owner_live_config():
+    return types.LiveConnectConfig(
+        response_modalities=["AUDIO"],
+        system_instruction=types.Content(parts=[types.Part(text=_owner_system())]),
+        tools=[ESCALATE],
+        input_audio_transcription={},
+        output_audio_transcription={})
+
 app = FastAPI()
 _genai = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 _guest_agent = None      # one shared guest agent; per-request tenant context picks the user
+_owner_agent = None      # full-toolset agent for OWNER MODE (only when ARIA_OWNER_TOKEN is set)
 
 
 def _agent_instance():
@@ -80,6 +103,19 @@ def _agent_instance():
     if _guest_agent is None:
         _guest_agent = build_agent(checkpointer=open_checkpointer(), guest=True)
     return _guest_agent
+
+
+def _owner_agent_instance():
+    """Lazily build the FULL agent for owner mode (your real toolset + memory)."""
+    global _owner_agent
+    if _owner_agent is None:
+        _owner_agent = build_agent(checkpointer=open_checkpointer(), guest=False)
+    return _owner_agent
+
+
+def _is_owner(token: str) -> bool:
+    """True only when owner mode is enabled AND this token matches the owner secret."""
+    return bool(OWNER_TOKEN) and (token or "").strip() == OWNER_TOKEN
 
 
 def _friends() -> dict:
@@ -128,7 +164,15 @@ def icon():
 
 @app.get("/live-token")
 def live_token(t: str = ""):
-    """Mint a single-use ephemeral Live token — invite-gated so only friends can connect."""
+    """Mint a single-use ephemeral Live token — invite-gated so only friends can connect.
+    Owner token (if set) gets the full-capability voice config and skips the caps."""
+    if _is_owner(t):
+        tok = _genai.auth_tokens.create(config=types.CreateAuthTokenConfig(
+            uses=1,
+            live_connect_constraints=types.LiveConnectConstraints(
+                model=MODEL, config=_owner_live_config()),
+            http_options=types.HttpOptions(api_version="v1alpha")))
+        return {"token": tok.name, "model": MODEL}
     uid, name = _resolve(t)
     if not usage.check_and_increment(uid, "tokens"):
         raise HTTPException(status_code=429, detail="Daily voice limit reached — try again tomorrow.")
@@ -149,6 +193,16 @@ def agent(req: AgentReq):
     """Answer one guest request — isolated to this friend's memory. Triages like the owner's
     text path: a cheap light-tier model handles pure general-knowledge directly, and the full
     (expensive) guest brain is reserved for anything touching their data/tools/the live world."""
+    # OWNER MODE: full agent, your real toolset + memory, no guest sandbox, no caps.
+    if _is_owner(req.token):
+        try:
+            result = _owner_agent_instance().invoke(
+                {"messages": [HumanMessage(content=req.request)]},
+                config=thread_config("owner-web"))
+            return {"result": extract_text(result["messages"][-1].content)}
+        except Exception as e:
+            return {"result": f"Sorry, I hit an error. ({e})"}
+
     uid, name = _resolve(req.token)
     thread = f"guest-{tenant.safe_id(uid)}"
     brain = _agent_instance()

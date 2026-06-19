@@ -97,6 +97,30 @@ class TestWebvoiceAuth(unittest.TestCase):
         self.assertEqual(captured["user"], "alice")
         self.assertEqual(captured["name"], "Alice")
 
+    def test_owner_token_runs_full_agent_no_caps(self):
+        captured = {}
+
+        def fake_invoke(payload, config=None):
+            captured["thread"] = config["configurable"]["thread_id"]
+            captured["guest"] = tenant.is_guest()      # owner mode must NOT be a guest tenant
+            return {"messages": [MagicMock(content="full aria")]}
+
+        owner = MagicMock(); owner.invoke = fake_invoke
+        with patch.object(server, "OWNER_TOKEN", "secret"), \
+             patch.object(server, "_owner_agent_instance", return_value=owner), \
+             patch("webvoice.usage.allow") as allow, patch("webvoice.usage.record") as rec:
+            r = self.client.post("/agent", json={"request": "read my email", "token": "secret"})
+        self.assertEqual(r.json()["result"], "full aria")
+        self.assertEqual(captured["thread"], "owner-web")
+        self.assertFalse(captured["guest"])            # full owner, not the guest sandbox
+        allow.assert_not_called(); rec.assert_not_called()   # caps bypassed for the owner
+
+    def test_owner_mode_off_by_default(self):
+        # With no ARIA_OWNER_TOKEN set, that token is just an invalid invite -> 403.
+        with patch.object(server, "OWNER_TOKEN", None), \
+             patch.object(server, "_friends", return_value={"good": "alice"}):
+            self.assertEqual(self.client.post("/agent", json={"request": "hi", "token": "secret"}).status_code, 403)
+
     def test_user_for_resolves_and_raises(self):
         with patch.object(server, "_friends", return_value={"t": "bob"}):
             self.assertEqual(server._user_for("t"), "bob")
