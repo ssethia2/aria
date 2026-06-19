@@ -3,6 +3,7 @@ annotated-types==0.7.0
 anthropic==0.84.0
 anyio==4.12.1
 attrs==25.4.0
+av==17.1.0
 backoff==2.2.1
 bcrypt==5.0.0
 beautifulsoup4==4.14.3
@@ -17,6 +18,7 @@ ddgs==9.14.4
 distro==1.9.0
 docstring_parser==0.17.0
 durationpy==0.10
+fastapi==0.135.1
 faster-whisper==1.2.1
 filelock==3.25.0
 filetype==1.2.0
@@ -57,7 +59,7 @@ langchain-google-genai==4.2.1
 langchain-openai==1.1.10
 langgraph==1.0.10
 langgraph-checkpoint==4.0.1
-langgraph-checkpoint-sqlite==3.1.0
+langgraph-checkpoint-sqlite
 langgraph-prebuilt==1.0.8
 langgraph-sdk==0.3.9
 langsmith==0.7.9
@@ -80,6 +82,7 @@ orjson==3.11.7
 ormsgpack==1.12.2
 overrides==7.7.0
 packaging==26.0
+playwright==1.58.0
 posthog==5.4.0
 proto-plus==1.27.1
 protobuf==6.33.5
@@ -128,4 +131,8 @@ websocket-client==1.9.0
 websockets==16.0
 xxhash==3.6.0
 zipp==3.23.0
+
+# Optional — intentionally NOT pinned here (would break `pip install` on a plain Linux box,
+# and nothing in the server/agent import graph needs it). Mac local-voice AEC only (voice_aec.py):
+#   speexdsp   # brew install speexdsp swig; pip install --no-build-isolation speexdsp
 zstandard==0.25.0
