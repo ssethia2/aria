@@ -54,6 +54,25 @@ function log(msg, cls="sys") {
   logEl.appendChild(div); logEl.scrollTop = logEl.scrollHeight;
 }
 
+// Live transcription streams in tiny chunks — accumulate them into ONE line per speaker
+// turn instead of a new line per word.
+let youEl = null, ariaEl = null;
+function transcript(kind, text) {
+  if (kind === "you") {
+    if (!youEl) { youEl = document.createElement("div"); youEl.className = "you";
+                  youEl.textContent = "you: "; logEl.appendChild(youEl); }
+    youEl.textContent += text;
+    ariaEl = null;            // the user speaking closes Aria's line
+  } else {
+    if (!ariaEl) { ariaEl = document.createElement("div"); ariaEl.className = "aria";
+                   ariaEl.textContent = "aria: "; logEl.appendChild(ariaEl); }
+    ariaEl.textContent += text;
+    youEl = null;             // Aria speaking closes the user's line
+  }
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function endTurn() { youEl = null; ariaEl = null; }
+
 // ---------- audio helpers ----------
 function downsampleTo16k(input, inRate) {
   const ratio = inRate / 16000;
@@ -112,7 +131,14 @@ const SYSTEM = "You are Aria, talking with Satvik out loud. Keep replies short, 
   "task, call escalate_to_aria with his request, then speak back what it returns.";
 
 let session = null;
-let invite = new URLSearchParams(location.search).get("t") || "";   // text chat needs it too
+// Token arrives in the URL (?t=…) on first open. The home-screen PWA launches from the
+// manifest start_url ("/") with NO query, so persist it and fall back to the saved one —
+// otherwise the icon always says "invalid or missing invite link".
+let invite = new URLSearchParams(location.search).get("t") || "";
+try {
+  if (invite) localStorage.setItem("aria_t", invite);
+  else invite = localStorage.getItem("aria_t") || "";
+} catch (e) {}
 
 async function start() {
   $("start").disabled = true;
@@ -180,12 +206,13 @@ async function start() {
 async function onMessage(msg) {
   const sc = msg.serverContent;
   if (sc) {
-    if (sc.interrupted) stopPlayback();
-    if (sc.inputTranscription?.text) log("you: " + sc.inputTranscription.text, "you");
-    if (sc.outputTranscription?.text) log("aria: " + sc.outputTranscription.text, "aria");
+    if (sc.interrupted) { stopPlayback(); ariaEl = null; }
+    if (sc.inputTranscription?.text) transcript("you", sc.inputTranscription.text);
+    if (sc.outputTranscription?.text) transcript("aria", sc.outputTranscription.text);
     for (const p of (sc.modelTurn?.parts || [])) {
       if (p.inlineData?.data) playPcm(p.inlineData.data);
     }
+    if (sc.turnComplete) endTurn();
   }
   if (msg.toolCall) {
     for (const fc of msg.toolCall.functionCalls) {
