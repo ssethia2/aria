@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<title>Aria — voice</title>
+<title>Aria — your personal assistant</title>
 <!-- PWA: lets you Add to Home Screen as a fullscreen, tap-to-launch app -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -30,10 +30,33 @@
   #send { font-size:16px; padding:12px 18px; border:0; border-radius:10px;
           background:#2f81f7; color:#fff; }
   #send:disabled { background:#30363d; }
+  h1 { font-size:22px; margin:16px 0 0; }
+  .tag { color:#8b949e; font-size:14px; margin:4px 0 14px; }
+  .intro p { font-size:14px; line-height:1.55; color:#c9d1d9; margin:0 0 10px; }
+  .intro .hint { color:#8b949e; }
+  .examples { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 2px; }
+  .ex { font:13px -apple-system, system-ui, sans-serif; padding:8px 12px; border-radius:999px;
+        border:1px solid #21262d; background:#161b22; color:#adbac7; text-align:left; cursor:pointer; }
+  .ex:active { background:#21262d; }
+  #log { height:32vh; }
 </style>
 </head>
 <body>
   <h1>Aria</h1>
+  <p class="tag">A personal assistant that actually remembers you.</p>
+  <div class="intro">
+    <p>This is your own private Aria. Talk or type — she can <b>remember things about you</b>,
+       <b>track reminders &amp; to-dos</b>, drop events on your calendar, and look things up on
+       the web. Whatever you tell her stays yours.</p>
+    <p class="hint">Tap <b>Start</b> to talk (you can interrupt her any time), or just type below.
+       Not sure where to begin? Try one:</p>
+    <div class="examples">
+      <button class="ex" type="button">Remember that I love spicy food</button>
+      <button class="ex" type="button">Remind me to call mom Friday at 6pm</button>
+      <button class="ex" type="button">Add dinner with Sam Saturday 7pm to my calendar</button>
+      <button class="ex" type="button">What can you do?</button>
+    </div>
+  </div>
   <button id="start">Tap to start talking</button>
   <div id="status">idle</div>
   <div id="log"></div>
@@ -253,6 +276,10 @@ async function sendText(text) {
   $("send").disabled = false; $("msg").focus();
 }
 $("composer").addEventListener("submit", (e) => { e.preventDefault(); sendText($("msg").value); });
+
+// Tap an example prompt to send it straight to Aria (text path — no mic needed).
+document.querySelectorAll(".ex").forEach((b) =>
+  b.addEventListener("click", () => sendText(b.textContent.trim())));
 
 $("start").addEventListener("click", start);
 </script>
