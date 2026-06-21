@@ -7,6 +7,8 @@ env/
 credentials.json
 token*.json
 profile.json
+tokens/
+webvoice/oauth_state.json
 
 # Python artifacts
 __pycache__/

@@ -31,6 +31,9 @@ SCOPES = [
     'https://www.googleapis.com/auth/calendar.events',
     'https://www.googleapis.com/auth/calendar.readonly',
 ]
+# Guests connect their OWN Gmail READ-ONLY (ADR 0007) — strictly less power than the owner:
+# read/triage only, never modify/send/delete. Tokens are per-tenant + encrypted (token_store).
+GUEST_GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 # Cache for the allowlist so we don't query GCS every time
 _cached_allowlist = None
 def _load_local_allowlist():
@@ -91,8 +94,33 @@ def get_allowed_recipients():
             return _cached_allowlist
         # Fail safe to an empty list so no emails can be sent if security checks fail
         return []
+def _guest_gmail_service():
+    """Build a READ-ONLY Gmail client for the current guest from their own stored, encrypted
+    token (ADR 0007). Returns None when this guest hasn't connected — fail-closed, never
+    falls back to the owner's token.json."""
+    import token_store
+    from tenant import get_current_user
+    data = token_store.load(get_current_user())
+    if not data:
+        return None
+    try:
+        creds = Credentials.from_authorized_user_info(data, GUEST_GMAIL_SCOPES)
+        if creds.expired and creds.refresh_token:
+            import google.auth.transport.requests
+            creds.refresh(google.auth.transport.requests.Request())
+            token_store.save(get_current_user(), json.loads(creds.to_json()))
+        return build('gmail', 'v1', credentials=creds)
+    except Exception as e:
+        print(f"Guest Gmail init failed: {e}")
+        return None
+
+
 def get_gmail_service():
-    """Shows basic usage of the Gmail API."""
+    """Gmail client for the CURRENT principal. Owner → token.json (full scopes, ADR 0003);
+    guest → their own read-only connected token (ADR 0007), or None if not connected."""
+    from tenant import is_guest
+    if is_guest():
+        return _guest_gmail_service()
     creds = None
     # The file token.json stores the user's access and refresh tokens
     token_path = os.path.join(os.path.dirname(__file__), '..', 'token.json')
