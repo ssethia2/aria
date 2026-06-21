@@ -29,8 +29,8 @@ def main():
     flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
     creds = flow.run_local_server(port=0)
 
-    with open(token_path, 'w') as f:
-        f.write(creds.to_json())
+    import token_store
+    token_store.atomic_write_text(token_path, creds.to_json())   # never leaves it empty
     print(f"✅ token.json updated — Gmail keeps working, Calendar is now connected.")
 
 

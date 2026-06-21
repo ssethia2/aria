@@ -126,8 +126,14 @@ def get_gmail_service():
     token_path = os.path.join(os.path.dirname(__file__), '..', 'token.json')
     creds_path = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
     if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-        
+        try:
+            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        except (ValueError, json.JSONDecodeError) as e:
+            # Empty/corrupt token.json (e.g. an interrupted write) — treat as "no creds"
+            # and fall through to re-auth, rather than crashing with a cryptic JSON error.
+            print(f"⚠️ token.json unreadable ({e}); re-authenticating.")
+            creds = None
+
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -137,9 +143,9 @@ def get_gmail_service():
             flow = InstalledAppFlow.from_client_secrets_file(
                 creds_path, SCOPES)
             creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open(token_path, 'w') as token:
-            token.write(creds.to_json())
+        # Save the credentials for the next run (atomic — never leaves an empty token.json).
+        import token_store
+        token_store.atomic_write_text(token_path, creds.to_json())
     try:
         service = build('gmail', 'v1', credentials=creds)
         return service

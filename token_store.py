@@ -18,6 +18,30 @@ from tenant import safe_id
 TOKENS_DIR = Path(os.path.join(os.path.dirname(__file__), "tokens"))
 
 
+def atomic_write_text(path, text: str, mode: int = 0o600):
+    """Write text crash-safely: temp file in the same dir, then os.replace (atomic on POSIX).
+    Guarantees the destination is ALWAYS either the old contents or the complete new contents —
+    never an empty/partial file if the process is killed mid-write (the bug that 0-byte'd
+    token.json on a bot restart)."""
+    import tempfile
+    path = str(path)
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=".swap")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)        # atomic
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def configured() -> bool:
     """True only when an encryption key is set — guest token storage is off without it."""
     return bool(os.getenv("ARIA_TOKEN_ENC_KEY"))
@@ -43,9 +67,7 @@ def save(user_id: str, token_data: dict):
     """Encrypt and persist a guest's token JSON, keyed by their principal id."""
     TOKENS_DIR.mkdir(parents=True, exist_ok=True)
     blob = _fernet().encrypt(json.dumps(token_data).encode())
-    p = _path(user_id)
-    p.write_bytes(blob)
-    os.chmod(p, 0o600)
+    atomic_write_text(_path(user_id), blob.decode())   # ciphertext is base64 ascii
 
 
 def load(user_id: str):

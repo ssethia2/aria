@@ -50,6 +50,28 @@ class TestEncryptedStore(unittest.TestCase):
         self.assertFalse(token_store.delete("alice"))      # idempotent
 
 
+class TestAtomicWrite(unittest.TestCase):
+    def test_atomic_write_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "token.json")
+            token_store.atomic_write_text(p, '{"a": 1}')
+            self.assertEqual(json.load(open(p))["a"], 1)
+
+    def test_failed_write_leaves_original_intact(self):
+        # If the write blows up mid-serialize, the existing good file must survive (not be
+        # truncated to empty) — the exact regression that 0-byte'd token.json.
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "token.json")
+            token_store.atomic_write_text(p, '{"good": true}')
+            class Boom:
+                def __str__(self): raise RuntimeError("serialize failed")
+            with self.assertRaises(Exception):
+                token_store.atomic_write_text(p, Boom())   # f.write(non-str) raises
+            self.assertEqual(json.load(open(p))["good"], True)   # original preserved
+            # no leftover temp files
+            self.assertEqual([f for f in os.listdir(d) if f != "token.json"], [])
+
+
 class TestPrincipalAwareGmail(unittest.TestCase):
     """get_gmail_service routes by principal and fails closed for guests."""
 

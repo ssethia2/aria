@@ -24,9 +24,9 @@ def authenticate_netflix_account():
     flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
     creds = flow.run_local_server(port=0)
     
-    with open(token_path, 'w') as token:
-        token.write(creds.to_json())
-        
+    import token_store
+    token_store.atomic_write_text(token_path, creds.to_json())   # never leaves it empty
+
     print(f"✅ Successfully created {token_path}")
 
 if __name__ == '__main__':
