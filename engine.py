@@ -824,6 +824,11 @@ class ProactiveEngine:
             if self.notify_fn(digest):
                 state["queued_notifications"] = []
 
+        # Dedicated liveness heartbeat: proves the ENGINE itself ran this loop, independent
+        # of whether any individual monitor succeeded (a revoked Gmail token must not make a
+        # healthy engine look dead — that masks the real problem during triage).
+        state["engine_tick_ts"] = time.time()
+
         save_state(state)
 
     def run_forever(self, stop_event: threading.Event = None):

@@ -54,12 +54,12 @@ class TestEngineFreshness(unittest.TestCase):
         return patch.object(hc, '_p', lambda *a: path if a == ('engine_state.json',) else os.path.join(d, *a))
 
     def test_fresh_tick_ok(self):
-        with self._with_state({'email-digest': {'last_check_ts': time.time() - 120}}):
+        with self._with_state({'engine_tick_ts': time.time() - 120}):
             status, _ = hc.check_engine_freshness()
         self.assertEqual(status, hc.OK)
 
     def test_stale_tick_fails(self):
-        with self._with_state({'email-digest': {'last_check_ts': time.time() - 7200}}):
+        with self._with_state({'engine_tick_ts': time.time() - 7200}):
             status, detail = hc.check_engine_freshness()
         self.assertEqual(status, hc.FAIL)
         self.assertIn("running", detail)
@@ -68,6 +68,20 @@ class TestEngineFreshness(unittest.TestCase):
         with self._with_state(None):
             status, _ = hc.check_engine_freshness()
         self.assertEqual(status, hc.WARN)
+
+    def test_healthy_engine_with_broken_email_monitor_is_ok(self):
+        # The bug we fixed: a revoked Gmail token freezes email-digest's ts, but the engine
+        # heartbeat is fresh — engine must read OK, not falsely "dead".
+        with self._with_state({'engine_tick_ts': time.time() - 60,
+                               'email-digest': {'last_check_ts': time.time() - 7200}}):
+            status, _ = hc.check_engine_freshness()
+        self.assertEqual(status, hc.OK)
+
+    def test_legacy_state_without_heartbeat_falls_back(self):
+        # Pre-heartbeat state files still work via the email-digest fallback.
+        with self._with_state({'email-digest': {'last_check_ts': time.time() - 120}}):
+            status, _ = hc.check_engine_freshness()
+        self.assertEqual(status, hc.OK)
 
 
 if __name__ == '__main__':

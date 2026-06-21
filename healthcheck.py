@@ -82,14 +82,18 @@ def check_databases():
 
 
 def check_engine_freshness():
-    """engine_state.json's email-digest timestamp proves the engine is ticking."""
+    """engine_state.json's dedicated heartbeat proves the engine LOOP is ticking — written
+    every tick independent of any monitor, so a broken monitor (e.g. a revoked Gmail token)
+    no longer makes a healthy engine read as dead."""
     import json
     path = _p('engine_state.json')
     if not os.path.exists(path):
         return WARN, "engine hasn't run yet (no state file)"
     with open(path) as f:
         state = json.load(f)
-    ts = state.get('email-digest', {}).get('last_check_ts')
+    # Prefer the dedicated heartbeat; fall back to the legacy email-digest ts for state files
+    # written before the heartbeat existed.
+    ts = state.get('engine_tick_ts') or state.get('email-digest', {}).get('last_check_ts')
     if not ts:
         return WARN, "engine state has no recent tick"
     age_min = (time.time() - ts) / 60
