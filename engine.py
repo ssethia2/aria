@@ -528,7 +528,7 @@ Return ONLY JSON (no markdown):
             recent="\n".join(f"- {r}" for r in recent) or "(nothing yet)",
             when=now.strftime('%A %-I%p'), context=context)
         try:
-            resp = get_llm(temperature=0).invoke(prompt)
+            resp = get_llm(temperature=0, tier="light").invoke(prompt)
         except Exception as e:
             print(f"[insight] llm failed: {e}")
             return []  # don't burn the slot on a transient failure
@@ -608,7 +608,7 @@ Return ONLY JSON (no markdown):
         from llm_router import get_llm
         prompt = self.PROMPT.format(existing=existing, context=context)
         try:
-            resp = get_llm(temperature=0).invoke(prompt)
+            resp = get_llm(temperature=0, tier="light").invoke(prompt)
         except Exception as e:
             print(f"[reflection] llm failed: {e}")
             return []   # don't burn the day on a transient failure
@@ -704,7 +704,7 @@ Return ONLY JSON (no markdown):
 
         from llm_router import get_llm
         try:
-            resp = get_llm(temperature=0).invoke(
+            resp = get_llm(temperature=0, tier="light").invoke(
                 self.PROMPT.format(existing=existing, context=context))
         except Exception as e:
             print(f"[weekly] llm failed: {e}")

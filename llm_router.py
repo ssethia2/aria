@@ -151,9 +151,16 @@ def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
 
 
 def get_llm(temperature=0, tier="standard"):
-    """Return a tiered ChatModel with built-in fallbacks. See module docstring for tiers."""
+    """Return a tiered ChatModel with built-in fallbacks. See module docstring for tiers.
+    Carries a cost-tracking callback so every call's token usage is recorded (cost_tracker)."""
     specs = TIERS.get(tier, TIERS["standard"])
     chain = []
     for name, factory in specs:
         chain.append((name, lambda t=temperature, f=factory: f(t)))
-    return _build_chain(chain, alert=(tier != "light"))
+    built = _build_chain(chain, alert=(tier != "light"))
+    try:
+        from cost_tracker import CostTrackingHandler
+        return built.with_config(callbacks=[CostTrackingHandler()])
+    except Exception as e:
+        print(f"[router] cost tracking not attached: {e}")
+        return built

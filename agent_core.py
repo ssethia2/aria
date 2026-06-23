@@ -42,6 +42,7 @@ from skills.home_assistant import list_lights, control_light
 from skills.spotify_manager import (play_music, playback_control, now_playing,
                                     create_playlist)
 from healthcheck import run_all as _health_run_all, summary as _health_summary
+from cost_tracker import get_costs
 from langchain_core.tools import tool as _tool
 
 
@@ -143,6 +144,7 @@ def build_tools(guest=False):
         now_playing,
         create_playlist,
         get_system_status,
+        get_costs,
     ]
 
 
