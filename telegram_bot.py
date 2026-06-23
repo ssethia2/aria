@@ -85,6 +85,81 @@ def send_message(chat_id, text: str):
             print(f"[send error] {e}")
 
 
+# --- Interactive commitment checklist (tap to mark done, no typing) ---
+
+def _checklist_markup():
+    """(inline_keyboard or None, items). One full-width button per open commitment — tapping
+    it marks that commitment done. callback_data is `done:<id>` (well under Telegram's 64B)."""
+    from skills.commitment_manager import get_open_commitments
+    items = get_open_commitments()
+    if not items:
+        return None, items
+    rows = []
+    for c in items:
+        label = c["description"]
+        if c.get("due_time"):
+            label += f" · {c.get('due_date','')} {c['due_time']}"
+        elif c.get("due_date"):
+            label += f" · {c['due_date']}"
+        rows.append([{"text": ("⬜ " + label)[:60], "callback_data": f"done:{c['id']}"}])
+    return {"inline_keyboard": rows}, items
+
+
+def send_checklist(chat_id, message_id=None):
+    """Send the open-commitments checklist, or edit `message_id` in place to re-render it
+    after a tap. Empty list → a clean 'all clear' (keyboard removed)."""
+    markup, items = _checklist_markup()
+    if not items:
+        payload = {"chat_id": chat_id, "text": "🎉 No open commitments — all clear!"}
+        method = "editMessageText" if message_id else "sendMessage"
+        if message_id:
+            payload["message_id"] = message_id
+    else:
+        payload = {"chat_id": chat_id,
+                   "text": "Your open commitments — tap one to check it off:",
+                   "reply_markup": markup}
+        method = "editMessageText" if message_id else "sendMessage"
+        if message_id:
+            payload["message_id"] = message_id
+    try:
+        requests.post(f"{API}/{method}", json=payload, timeout=15)
+    except Exception as e:
+        print(f"[checklist] send failed: {e}")
+
+
+def _answer_callback(cq_id, text=None):
+    try:
+        payload = {"callback_query_id": cq_id}
+        if text:
+            payload["text"] = text
+        requests.post(f"{API}/answerCallbackQuery", json=payload, timeout=10)
+    except Exception as e:
+        print(f"[checklist] answer failed: {e}")
+
+
+def handle_callback(cq, allowed):
+    """Handle a tapped checklist button: complete the commitment, ack, re-render in place."""
+    cq_id = cq.get("id")
+    data = cq.get("data", "")
+    msg = cq.get("message") or {}
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    message_id = msg.get("message_id")
+    if allowed and chat_id not in allowed:      # same allowlist gate as messages
+        _answer_callback(cq_id)
+        return
+    if data.startswith("done:"):
+        try:
+            from skills.commitment_manager import complete
+            done = complete(int(data.split(":", 1)[1]))
+            _answer_callback(cq_id, "✅ Done!" if done else "Already done")
+        except Exception as e:
+            print(f"[checklist] complete failed: {e}")
+            _answer_callback(cq_id, "Couldn't update — try again")
+        send_checklist(chat_id, message_id=message_id)
+    else:
+        _answer_callback(cq_id)
+
+
 class TypingPulse:
     """Keep Telegram's chat action ('typing…' / 'recording voice…') alive while we
     work — a single sendChatAction expires after ~5s, leaving the user staring at
@@ -310,6 +385,9 @@ def main():
 
         for update in updates:
             offset = update["update_id"] + 1
+            if update.get("callback_query"):     # a tapped checklist button
+                handle_callback(update["callback_query"], allowed)
+                continue
             message = update.get("message") or update.get("edited_message")
             if not message or not ("text" in message or "voice" in message):
                 continue
@@ -356,7 +434,13 @@ def main():
 
             if text.lower() in ("/start", "/help"):
                 send_message(chat_id, "Hi, I'm Aria. Just talk to me normally — I can manage "
-                                      "your email, news, reminders, and more.")
+                                      "your email, news, reminders, and more.\n\n"
+                                      "Tip: /tasks shows your commitments as a checklist you "
+                                      "can tap to check off.")
+                continue
+
+            if text.lower() in ("/tasks", "/todo", "/todos", "/commitments", "/checklist"):
+                send_checklist(chat_id)
                 continue
 
             try:
