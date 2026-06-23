@@ -98,6 +98,28 @@ class TestUpdate(TempConfig):
             msg = gc.update_calendar_event.invoke({'query': 'dentist'})
         self.assertIn('Nothing to change', msg)
 
+    def test_timed_patch_nulls_allday_date_field(self):
+        # Making an all-day event timed must null the old `date` key, or Google 400s on
+        # an event carrying both date and dateTime (the bug behind the bad calendar turn).
+        events = {'primary': [_ev('p1', 'Trip', '2026-06-20')]}   # all-day (date only)
+        service = _service_with(events)
+        with patch.object(gc, 'get_calendar_service', return_value=service):
+            gc.update_calendar_event.invoke({'query': 'trip', 'new_date_iso': '2026-06-21',
+                                             'new_start_time': '09:00'})
+        body = service.events.return_value.patch.call_args.kwargs['body']
+        self.assertIn('dateTime', body['start'])
+        self.assertIsNone(body['start']['date'])      # counterpart explicitly cleared
+        self.assertIsNone(body['end']['date'])
+
+    def test_api_error_returns_graceful_message_not_raw(self):
+        events = {'primary': [_ev('p1', 'Dentist', '2026-06-20T15:00:00-04:00')]}
+        service = _service_with(events)
+        service.events.return_value.patch.return_value.execute.side_effect = Exception("HttpError 400")
+        with patch.object(gc, 'get_calendar_service', return_value=service):
+            msg = gc.update_calendar_event.invoke({'query': 'dentist', 'new_title': 'X'})
+        self.assertNotIn('400', msg)                  # no raw error leaked
+        self.assertIn('try again', msg.lower())
+
 
 if __name__ == '__main__':
     unittest.main()

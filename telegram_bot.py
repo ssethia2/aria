@@ -377,10 +377,10 @@ def main():
                         with TypingPulse(chat_id):
                             reply = run_agent_streaming(agent, chat_id, text)
                     except Exception as e2:
-                        reply = f"Sorry, something went wrong: {e2}"
+                        reply = "Hmm, that didn't go through on my end — mind trying again in a sec?"
                         print(f"[agent error after repair] {e2}")
                 else:
-                    reply = f"Sorry, something went wrong: {e}"
+                    reply = "Hmm, that didn't go through on my end — mind trying again in a sec?"
                     print(f"[agent error] {e}")
 
             # Reply in kind: spoken question gets a spoken answer (text rides along).

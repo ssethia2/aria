@@ -51,6 +51,9 @@ def get_calendar_service():
         if creds.expired and creds.refresh_token:
             import google.auth.transport.requests
             creds.refresh(google.auth.transport.requests.Request())
+            # Persist the refreshed token (atomically) so we don't re-refresh every call.
+            import token_store
+            token_store.atomic_write_text(token_path, creds.to_json())
         return build('calendar', 'v3', credentials=creds)
     except Exception as e:
         print(f"Failed to build Calendar service: {e}")
@@ -193,16 +196,21 @@ def create_calendar_event(title: str, date_iso: str, start_time: str = None,
     shared_id = cfg.get('shared_calendar_id')
     created, notes = [], []
 
-    if calendars in ('both', 'personal_only'):
-        service.events().insert(calendarId='primary', body=body).execute()
-        created.append("personal")
+    try:
+        if calendars in ('both', 'personal_only'):
+            service.events().insert(calendarId='primary', body=body).execute()
+            created.append("personal")
 
-    if calendars in ('both', 'shared_only'):
-        if shared_id:
+        if calendars in ('both', 'shared_only') and shared_id:
             shared_body = dict(body, colorId=YELLOW)
             service.events().insert(calendarId=shared_id, body=shared_body).execute()
             created.append(f"{cfg.get('shared_calendar_label', 'shared')} (yellow)")
-        elif calendars == 'shared_only':
+    except Exception as e:
+        print(f"Calendar create failed: {e}")
+        return "I couldn't add that to your calendar just now — want me to try again?"
+
+    if calendars in ('both', 'shared_only') and not shared_id:
+        if calendars == 'shared_only':
             return ("The shared calendar isn't configured yet — run calendar setup "
                     "(list_my_calendars, then configure_shared_calendar) first.")
         else:
@@ -294,12 +302,21 @@ def update_calendar_event(query: str, date_iso: str = None, new_title: str = Non
     if new_date_iso or new_start_time:
         base_date = new_date_iso or copies[0]['start'][:10]
         eb = _event_body(new_title or copies[0]['summary'], base_date, new_start_time, new_end_time)
-        body['start'], body['end'] = eb['start'], eb['end']
+        # Explicitly null the counterpart key so a type change (all-day <-> timed) doesn't
+        # leave the event with BOTH date and dateTime, which Google rejects with a 400.
+        start, end = dict(eb['start']), dict(eb['end'])
+        start['date' if 'dateTime' in start else 'dateTime'] = None
+        end['date' if 'dateTime' in end else 'dateTime'] = None
+        body['start'], body['end'] = start, end
     if not body:
         return "Nothing to change — give a new title and/or date/time."
 
-    for c in copies:
-        service.events().patch(calendarId=c['calendar_id'], eventId=c['event_id'], body=body).execute()
+    try:
+        for c in copies:
+            service.events().patch(calendarId=c['calendar_id'], eventId=c['event_id'], body=body).execute()
+    except Exception as e:
+        print(f"Calendar update failed: {e}")
+        return "I couldn't update that event just now — want me to try again?"
     return f"Updated '{new_title or copies[0]['summary']}' on {len(copies)} calendar(s)."
 
 
@@ -325,8 +342,12 @@ def delete_calendar_event(query: str, date_iso: str = None) -> str:
 
     copies = next(iter(groups.values()))
     summary = copies[0]['summary']
-    for c in copies:
-        service.events().delete(calendarId=c['calendar_id'], eventId=c['event_id']).execute()
+    try:
+        for c in copies:
+            service.events().delete(calendarId=c['calendar_id'], eventId=c['event_id']).execute()
+    except Exception as e:
+        print(f"Calendar delete failed: {e}")
+        return "I couldn't remove that event just now — want me to try again?"
     return f"Deleted '{summary}' from {len(copies)} calendar(s)."
 
 
