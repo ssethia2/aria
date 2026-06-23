@@ -45,6 +45,11 @@ def deliver(telegram_md: str, email_md: str) -> list:
             user_email = profile['emailAddress']
             if send_email(service, user_email, "Your Daily Assistant Summary ☀️", email_md):
                 delivered.append("email")
+        else:
+            # Gmail unusable (token expired/revoked) — say so loudly so it doesn't just
+            # silently skip the email briefing. The Telegram briefing above still went out.
+            send_telegram("📭 Couldn't email your briefing — Gmail needs re-auth. "
+                          "Run `python3 auth_google.py` on the host.")
     except Exception as e:
         print(f"Email delivery failed: {e}")
 

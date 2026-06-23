@@ -134,16 +134,26 @@ def get_gmail_service():
             print(f"⚠️ token.json unreadable ({e}); re-authenticating.")
             creds = None
 
-    # If there are no (valid) credentials available, let the user log in.
+    # If there are no (valid) credentials available, refresh — but NEVER launch interactive
+    # browser OAuth from here. This runs under launchd/cron and the engine; a blocking
+    # run_local_server() would hang the morning briefing forever waiting for a click (it did).
+    # Interactive bootstrap is auth_google.py's job; allow it here only behind an explicit flag.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             import google.auth.transport.requests
-            creds.refresh(google.auth.transport.requests.Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                creds_path, SCOPES)
+            try:
+                creds.refresh(google.auth.transport.requests.Request())
+            except Exception as e:
+                print(f"⚠️ Gmail token refresh failed ({e}). Re-auth: python3 auth_google.py")
+                return None
+        elif os.getenv("ARIA_ALLOW_INTERACTIVE_AUTH") == "1":
+            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
             creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run (atomic — never leaves an empty token.json).
+        else:
+            print("⚠️ No usable Gmail credentials and interactive auth is disabled "
+                  "(headless). Re-auth: python3 auth_google.py")
+            return None
+        # Persist the refreshed/new token atomically (never leaves an empty token.json).
         import token_store
         token_store.atomic_write_text(token_path, creds.to_json())
     try:
