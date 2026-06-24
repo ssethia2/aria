@@ -6,16 +6,17 @@ tiers, each an ordered chain that falls through on error/rate-limit (LangChain
 
   heavy    : Opus 4.8 -> Sonnet 4.6 -> Gemini   (agentic multi-step: browser, complex)
   standard : Sonnet 4.6 -> Opus 4.8 -> Gemini   (chat agent, insight, news, compaction)
-  light    : Gemini (free tier) -> Haiku 4.5     (high-frequency screening/judgment —
-             leads with the free model and falls to cheap paid Haiku when it 429s,
-             the "use free while it lasts" strategy, scoped to low-stakes work)
+  light    : Haiku 4.5 -> Gemini                (high-frequency screening + the chat
+             fast-path: cheap, RELIABLE Haiku first. Gemini's free tier is only a
+             fallback — its 20-requests/day cap is far too small to lead with, and
+             doing so silently starved the agent down to free-tier scraps.)
 
 Adding a provider (Groq/OpenRouter free models, etc.) = one more (name, factory) entry
 in a chain; the fallback machinery is provider-agnostic.
 
 When a chain link fails at invoke time the user is told via Telegram (once per model per
-day) — EXCEPT the light tier, whose free-primary is *expected* to exhaust daily and
-fall through silently. Model lineup current as of 2026-06.
+day) — EXCEPT the light tier, whose fall-through to free-tier Gemini is low-stakes and
+stays silent. Model lineup current as of 2026-06.
 """
 import json
 import os
@@ -52,7 +53,7 @@ TIERS = {
                  ("gemini-2.5-flash", _gemini)],
     "standard": [("claude-sonnet-4-6", _sonnet), ("claude-opus-4-8", _opus),
                  ("gemini-2.5-flash", _gemini)],
-    "light":    [("gemini-2.5-flash", _gemini), ("claude-haiku-4-5", _haiku)],
+    "light":    [("claude-haiku-4-5", _haiku), ("gemini-2.5-flash", _gemini)],
 }
 
 
