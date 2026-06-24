@@ -356,8 +356,16 @@ def open_checkpointer() -> SqliteSaver:
 
 
 def thread_config(thread_id: str) -> dict:
-    """Invoke config selecting which persistent conversation thread to continue."""
-    return {"configurable": {"thread_id": thread_id}}
+    """Invoke config selecting which persistent conversation thread to continue.
+
+    Carries the cost-tracking handler at the CONFIG level (not just on the model): create_agent
+    re-binds the model and drops a model-attached callback, so the agent's own LLM calls — the
+    dominant Claude cost per chat turn — were going untracked. A config callback propagates to
+    every child run, so the agent's model calls are now captured too. (Direct get_llm().invoke()
+    calls, which don't use this config, are still caught by the get_llm-level handler — the two
+    paths are disjoint, so no double counting.)"""
+    from cost_tracker import CostTrackingHandler
+    return {"configurable": {"thread_id": thread_id}, "callbacks": [CostTrackingHandler()]}
 
 
 def build_agent(checkpointer=None, guest=False):

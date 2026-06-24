@@ -42,10 +42,14 @@ def _rates(model: str):
 
 
 def estimate_cost(model, input_tokens=0, output_tokens=0, cache_read=0, cache_creation=0):
-    """Estimated USD for one call. input_tokens is the UNCACHED prompt portion (LangChain
-    reports cache tokens separately in input_token_details)."""
+    """Estimated USD for one call. LangChain's usage_metadata.input_tokens is the TOTAL prompt
+    (cached + uncached), with cache_read/cache_creation reported separately in
+    input_token_details — so subtract them to get the full-price uncached portion, then bill
+    cache reads at 0.1x and writes at the 1h-TTL 2x. (Charging input_tokens in full AND the
+    cache tokens again over-counts cached turns ~8x.)"""
     pin, pout = _rates(model)
-    return round(input_tokens * pin
+    uncached = max(input_tokens - cache_read - cache_creation, 0)
+    return round(uncached * pin
                  + cache_read * pin * CACHE_READ_FACTOR
                  + cache_creation * pin * CACHE_WRITE_FACTOR
                  + output_tokens * pout, 6)

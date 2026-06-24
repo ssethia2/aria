@@ -22,6 +22,15 @@ class TestPricing(unittest.TestCase):
     def test_unknown_model_is_zero_not_crash(self):
         self.assertEqual(ct.estimate_cost("some-future-model", 1000, 1000), 0.0)
 
+    def test_cached_tokens_not_double_counted(self):
+        # input_tokens is the TOTAL (cached + uncached); only the uncached part bills full.
+        # 10000 total, 9500 cached-read -> 500 uncached @ $5/1M + 9500 @ 0.1x $5/1M.
+        cost = ct.estimate_cost("claude-opus-4-8", 10000, 0, cache_read=9500)
+        expected = 500 * 5/1e6 + 9500 * 5/1e6 * 0.1
+        self.assertAlmostEqual(cost, expected, places=6)
+        # must be far below charging all 10000 at full rate ($0.05)
+        self.assertLess(cost, 0.01)
+
     def test_cache_read_is_cheap_creation_is_pricey(self):
         read = ct.estimate_cost("claude-opus-4-8", 0, 0, cache_read=1_000_000)
         creation = ct.estimate_cost("claude-opus-4-8", 0, 0, cache_creation=1_000_000)
