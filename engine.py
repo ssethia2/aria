@@ -143,7 +143,12 @@ class CommitmentMonitor(Monitor):
             who = f" ({c['who']})" if c.get('who') else ""
             when = f" — scheduled for {c['due_time']}" if c.get('due_time') else ""
             tag = f" (repeats {c['recurring'].replace('_', ' ')})" if recurring else ""
-            out.append(Notification(f"⏰ {c['description']}{who}{when}{tag}"))
+            # A reminder with an explicit due_time is an alarm the user SET for that exact
+            # moment — honor it even in quiet hours (urgent). A 3 AM "leave for airport" ping
+            # queued until 08:00 is a missed reminder. Date-only/recurring-without-time items
+            # fire mid-morning (outside quiet hours) and stay non-urgent.
+            out.append(Notification(f"⏰ {c['description']}{who}{when}{tag}",
+                                    urgent=bool(c.get('due_time'))))
             if recurring:
                 advance_recurring(c["id"], today)  # roll to next occurrence
             else:

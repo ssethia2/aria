@@ -166,7 +166,28 @@ class TestCommitmentMonitor(TempStateMixin, unittest.TestCase):
         self.assertEqual(len(first), 1)
         self.assertIn("Call Mom", first[0].text)
         self.assertIn("15:00", first[0].text)
+        self.assertTrue(first[0].urgent)   # explicit due_time -> alarm; bypasses quiet hours
         self.assertEqual(second, [])  # already pinged today
+
+    def test_timed_reminder_fires_through_quiet_hours(self):
+        # The actual miss: a 3 AM "leave for airport" reminder must NOT be queued until 08:00.
+        due = [{"id": 44, "description": "Leave keys at front desk", "who": None,
+                "due_time": "03:00", "recurring": None, "is_recurring": False}]
+        sent = []
+        mon = CommitmentMonitor(now_fn=lambda: datetime(2026, 6, 24, 3, 0))
+        eng = ProactiveEngine([mon], notify_fn=lambda t: sent.append(t) or True,
+                              quiet_hours=(23, 8))
+        with patch('skills.commitment_manager.get_pingable_now', return_value=due):
+            eng.tick(now=datetime(2026, 6, 24, 3, 0))
+        self.assertTrue(any("Leave keys" in t for t in sent))   # delivered now, not queued
+
+    def test_dateonly_reminder_stays_non_urgent(self):
+        due = [{"id": 9, "description": "Renew passport", "who": None,
+                "due_time": None, "recurring": None, "is_recurring": False}]
+        mon = CommitmentMonitor(now_fn=lambda: datetime(2026, 6, 10, 10, 0))
+        with patch('skills.commitment_manager.get_pingable_now', return_value=due):
+            out = mon.check({})
+        self.assertFalse(out[0].urgent)   # ambient, no user-set time -> respects quiet hours
 
     def test_nothing_pingable_means_silence(self):
         mon = CommitmentMonitor(now_fn=lambda: datetime(2026, 6, 10, 9, 0))
