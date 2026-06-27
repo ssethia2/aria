@@ -154,6 +154,38 @@ class TestEngineMechanics(TempStateMixin, unittest.TestCase):
         self.assertEqual(sent, ["still alive"])
 
 
+class TestNetflixQuiet(unittest.TestCase):
+    def _run(self, result):
+        svc = MagicMock()
+        svc.users.return_value.messages.return_value.list.return_value.execute.return_value = {
+            "messages": [{"id": "newmsg"}]}
+        with patch("skills.netflix_manager.get_netflix_gmail_service", return_value=svc), \
+             patch("skills.netflix_manager.update_netflix_household") as upd:
+            upd.invoke.return_value = result
+            return NetflixMonitor().check({})
+
+    def test_clean_success_is_silent(self):
+        out = self._run("✅ Verified: Netflix's page confirmed the household update.")
+        self.assertEqual(out, [])                       # no flood on routine success
+
+    def test_failure_still_pings(self):
+        out = self._run("The link led to a Netflix login wall, so I can't complete this one.")
+        self.assertEqual(len(out), 1)                   # needs the user -> notify
+        self.assertIn("couldn't finish", out[0].text)
+
+
+class TestRuleRedundancy(unittest.TestCase):
+    def test_overlapping_rule_is_redundant(self):
+        existing = "Pack blankets and binoculars for trips to Maine."
+        self.assertTrue(engine._rule_redundant(
+            "Remember to pack blankets and binoculars for Maine trips.", existing))
+
+    def test_novel_rule_is_not_redundant(self):
+        existing = "Pack blankets for Maine trips."
+        self.assertFalse(engine._rule_redundant(
+            "Send Diane a status update every Friday afternoon.", existing))
+
+
 class TestCommitmentMonitor(TempStateMixin, unittest.TestCase):
     def test_timed_commitment_pings_once(self):
         due = [{"id": 1, "description": "Call Mom", "who": "Mom", "due_time": "15:00",

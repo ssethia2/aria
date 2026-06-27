@@ -632,7 +632,7 @@ Return ONLY JSON (no markdown):
         out = []
         for rule in (verdict.get("suggestions") or [])[:2]:
             rule = (rule or "").strip()
-            if not rule or rule in recent:
+            if not rule or rule in recent or _rule_redundant(rule, existing):
                 continue
             recent.append(rule)
             out.append(Notification(
@@ -731,13 +731,31 @@ Return ONLY JSON (no markdown):
             out.append(Notification("🗓️ Looking back on the week — " + note))
         rule = (verdict.get("rule") or "").strip()
         recent = state.get("recent", [])
-        if rule and rule not in recent:
+        if rule and rule not in recent and not _rule_redundant(rule, existing):
             recent.append(rule)
             out.append(Notification(
                 "🧠 A pattern worth a standing rule?\n"
                 f"  “{rule}”\nReply yes to adopt it, or just ignore."))
         state["recent"] = recent[-8:]
         return out
+
+
+def _rule_redundant(rule: str, existing: str) -> bool:
+    """True if a proposed standing rule substantially overlaps the EXISTING registry — so we
+    never re-propose a rule the user already has (the 'asked for a rule already updated' bug).
+    Deterministic content-word overlap; the LLM is also told the existing rules, but it can't
+    be trusted to never restate one."""
+    import re
+    stop = {"the", "a", "an", "to", "of", "for", "and", "or", "is", "are", "be", "with", "on",
+            "in", "when", "if", "his", "her", "my", "your", "always", "never", "by", "default",
+            "from", "now", "should", "that", "this", "you", "him", "she"}
+    def words(s):
+        return {w for w in re.findall(r"[a-z]+", (s or "").lower())
+                if w not in stop and len(w) > 2}
+    rw = words(rule)
+    if not rw:
+        return False
+    return len(rw & words(existing)) / len(rw) >= 0.6
 
 
 class NetflixMonitor(Monitor):
@@ -775,8 +793,14 @@ class NetflixMonitor(Monitor):
         print(f"[engine] netflix: new household email {msg_id}, acting now")
         state["last_handled_id"] = msg_id
         result = update_netflix_household.invoke({})
+        # The point of automating this is that the user is NOT bothered. Stay SILENT on a clean
+        # success (Netflix sends these often — a ping each time is the bulk of the message flood);
+        # only notify when it actually needs them (login wall, expired link, failure).
+        if result.strip().startswith("✅"):
+            print("[engine] netflix: handled cleanly — staying silent")
+            return []
         return [Notification(
-            f"📺 A Netflix household-update email arrived — I acted on it.\n{result}")]
+            f"📺 A Netflix household-update email arrived but I couldn't finish it:\n{result}")]
 
 
 class ProactiveEngine:
