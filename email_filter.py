@@ -16,3 +16,18 @@ those too.
 def is_bulk(email: dict) -> bool:
     """True if the email is bulk mail safe to skip LLM screening on."""
     return bool((email.get('list_unsubscribe') or '').strip())
+
+
+import re
+
+_NOREPLY_RE = re.compile(
+    r"(no-?reply|do-?not-?reply|notifications?@|alerts?@|automated|mailer-daemon|"
+    r"noreply|updates@|info@|support@.*\.zendesk\.)", re.IGNORECASE)
+
+
+def is_noreply_sender(from_header: str) -> bool:
+    """True when the From address is an automated/no-reply sender — mail that can still be
+    WORTH FLAGGING (bank alert, booking change) but can never be a reply the user OWES.
+    Used only to gate reply_owed tracking, never digest screening (see module docstring:
+    important transactional mail legitimately uses these addresses)."""
+    return bool(_NOREPLY_RE.search(from_header or ""))

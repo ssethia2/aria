@@ -181,6 +181,9 @@ booking or order) is waiting on the user's answer, confirmation, or decision.
 needs_reply = FALSE for solicitations the user can simply ignore — cold outreach,
 recruiting, focus-group / survey / study invitations, sales, "would you be interested",
 events the user didn't initiate — EVEN when phrased as a question from a real person.
+needs_reply = FALSE for ALL automated notices — bank/card alerts and rate-change notices,
+booking/order confirmations, email-validation or verify-your-account messages, shipping
+updates, platform notifications. A machine sent them; no human is waiting on a reply.
 If you're unsure, set needs_reply = false but still flag it with a reason noting it MIGHT
 warrant a reply, so the user can judge.
 
@@ -269,6 +272,12 @@ Return [] if nothing qualifies — that should be the common case."""
                 continue
             entry = {"sender": email['sender'], "subject": email['subject'],
                      "reason": item.get('reason', '')}
+            # Deterministic guard: you can't OWE a reply to a no-reply/automated sender
+            # (bank notices, booking confirmations, validation emails) no matter what the
+            # screening LLM said. Still flagged in the digest — just never tracked.
+            from email_filter import is_noreply_sender
+            if item.get('needs_reply') and is_noreply_sender(email['sender']):
+                item['needs_reply'] = False
             if item.get('needs_reply') and email['id'] not in converted:
                 sender_name = email['sender'].split('<')[0].strip(' "') or email['sender']
                 # A thread RE-OWES a reply each time they write back. So: if there's an
@@ -285,10 +294,12 @@ Return [] if nothing qualifies — that should be the common case."""
                     else:
                         create = False
                 if create:
-                    due = (self.now_fn() + timedelta(days=2)).strftime('%Y-%m-%d')
+                    # NO fabricated due date. The sender set no deadline; inventing "+2 days"
+                    # made Aria present made-up dates as real ("I was making up due dates").
+                    # The chase loop nudges reply_owed by AGE, and the briefing shows open ones.
                     cid = commitment_manager.add(
                         description=f"Reply to {sender_name}: {email['subject']}",
-                        kind='reply_owed', who=sender_name, due_date=due, source='email')
+                        kind='reply_owed', who=sender_name, source='email')
                     entry["tracked"] = f"#{cid}"
                 else:
                     entry["tracked"] = "(you already owe a reply on this thread)"
@@ -629,12 +640,24 @@ Return ONLY JSON (no markdown):
 
         state["last_date"] = today
         recent = state.get("recent", [])
+        # Volume cap: at most ONE proposal per day and TWO per ISO week — "too many
+        # learnings" erodes trust faster than a missed pattern (it resurfaces next week).
+        week = self.now_fn().strftime('%G-W%V')
+        if state.get("week") != week:
+            state["week"], state["week_count"] = week, 0
         out = []
-        for rule in (verdict.get("suggestions") or [])[:2]:
+        for rule in (verdict.get("suggestions") or [])[:1]:
             rule = (rule or "").strip()
-            if not rule or rule in recent or _rule_redundant(rule, existing):
+            if not rule or state.get("week_count", 0) >= 2:
+                continue
+            # Dedup against BOTH the adopted registry and prior proposals — by word overlap,
+            # not exact match, so a paraphrase of last week's suggestion doesn't re-fire
+            # (the same trip-prep rule was proposed 3x in different wording).
+            if rule in recent or _rule_redundant(rule, existing) \
+                    or _rule_redundant(rule, " ".join(recent)):
                 continue
             recent.append(rule)
+            state["week_count"] = state.get("week_count", 0) + 1
             out.append(Notification(
                 "🧠 Learning from today — want this as a standing rule?\n"
                 f"  “{rule}”\nReply yes to adopt it, or just ignore."))
@@ -731,7 +754,8 @@ Return ONLY JSON (no markdown):
             out.append(Notification("🗓️ Looking back on the week — " + note))
         rule = (verdict.get("rule") or "").strip()
         recent = state.get("recent", [])
-        if rule and rule not in recent and not _rule_redundant(rule, existing):
+        if rule and rule not in recent and not _rule_redundant(rule, existing) \
+                and not _rule_redundant(rule, " ".join(recent)):
             recent.append(rule)
             out.append(Notification(
                 "🧠 A pattern worth a standing rule?\n"

@@ -184,6 +184,11 @@ turn, reading each item's due_date and due_time exactly. NEVER infer a commitmen
 time from earlier in the conversation (stale/partial chat is how dates and times get mixed
 up), and keep due_date (the day) and due_time (the clock time) distinct — a 4pm reminder due
 today is not "yesterday".
+DATES ARE FACTS, NOT ESTIMATES: if an item has no due_date, say it's undated — NEVER invent,
+estimate, or pad a deadline ("making up due dates" destroys trust in every real one). A
+reply_owed's date, when present, is a nudge marker — call it "flagged for", not "due". A
+RECURRING item's due_date is just its NEXT OCCURRENCE — never call it a "deadline" (a daily
+ticket reminder recurring tomorrow does not mean tickets have a deadline tomorrow).
 Use kind='people_date' with recurrence='yearly' for birthdays, and recurrence
 ('daily'/'weekly'/'monthly'/'every_N_days') for anything they want REPEATED on a
 schedule ("remind me weekly to..."). Use due_time ONLY when they name a time of day.

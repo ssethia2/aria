@@ -185,6 +185,30 @@ class TestRuleRedundancy(unittest.TestCase):
         self.assertFalse(engine._rule_redundant(
             "Send Diane a status update every Friday afternoon.", existing))
 
+    def test_paraphrase_of_prior_proposal_is_redundant(self):
+        # The actual repeat: the same trip-prep rule proposed 3x in different wording.
+        prior = ("When prepping for trips with limited connectivity, proactively flag "
+                 "overdue emails and time-sensitive replies 24 hours in advance so they "
+                 "can be cleared before going offline.")
+        variant = ("When user is traveling with limited connectivity, proactively flag "
+                   "overdue emails and time-sensitive replies 24 hours in advance.")
+        self.assertTrue(engine._rule_redundant(variant, prior))
+
+
+class TestNoreplyFilter(unittest.TestCase):
+    def test_automated_senders_detected(self):
+        from email_filter import is_noreply_sender
+        for f in ("PNC Bank <no-reply@pnc.com>", "Expedia <noreply@expedia.com>",
+                  "FIFA <do-not-reply@fifa.com>", "Airbnb <automated@airbnb.com>",
+                  "GitHub <notifications@github.com>"):
+            self.assertTrue(is_noreply_sender(f), f)
+
+    def test_humans_pass(self):
+        from email_filter import is_noreply_sender
+        for f in ("Diane <diane@company.com>", "Rohan <rohan@x.com>",
+                  "Ashley Mareira <ash@gmail.com>"):
+            self.assertFalse(is_noreply_sender(f), f)
+
 
 class TestCommitmentMonitor(TempStateMixin, unittest.TestCase):
     def test_timed_commitment_pings_once(self):
@@ -270,6 +294,29 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         add.assert_called_once()
         self.assertEqual(add.call_args.kwargs['kind'], 'reply_owed')
         self.assertIn('Rohan', add.call_args.kwargs['who'])
+        # No fabricated deadline: the sender set none, so we track it UNDATED
+        # ("I was making up due dates" — never again).
+        self.assertIsNone(add.call_args.kwargs.get('due_date'))
+
+    def test_noreply_sender_never_tracked_as_reply_owed(self):
+        # PNC/Expedia/FIFA-style automated mail: flag-worthy, but you can't owe a
+        # reply to a no-reply address — even when the screening LLM says needs_reply.
+        service = self._service(['m2'])
+        service.users.return_value.messages.return_value.get.return_value \
+            .execute.return_value = {
+                'payload': {'headers': [
+                    {'name': 'Subject', 'value': 'Your recurring payment changed'},
+                    {'name': 'From', 'value': 'PNC Bank <no-reply@pnc.com>'}]},
+                'snippet': 'Please review your payment change'}
+        mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 6, 10, 12, 0))
+        state = {}
+        with patch('skills.email_manager.get_gmail_service', return_value=service), \
+             patch.object(engine, '_get_llm', return_value=self._llm(
+                 '[{"id": "m2", "reason": "payment change", "needs_reply": true}]')), \
+             patch('skills.commitment_manager.add') as add:
+            mon.check(state)
+        add.assert_not_called()                            # never tracked
+        self.assertEqual(len(state["pending_digest"]), 1)  # but still surfaced in digest
 
     def test_reply_owed_reconcile_open_thread(self):
         """A thread re-owes a reply only after the prior one was answered."""

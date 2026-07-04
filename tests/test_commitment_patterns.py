@@ -53,8 +53,12 @@ class TestCommitmentPatterns(unittest.TestCase):
         self.assertIn("diane", joined)
 
     def test_clean_slate_has_no_findings(self):
+        # "future thing" must be relative — a hardcoded date silently becomes overdue when
+        # the real calendar passes it (analyze_commitments below runs with the REAL today).
+        from datetime import timedelta
+        future = (date.today() + timedelta(days=30)).isoformat()
         self._add("done on time", "deadline", None, "2026-06-08", "done", "2026-06-08 09:00:00")
-        self._add("future thing", "promise", None, "2026-07-01", "open")
+        self._add("future thing", "promise", None, future, "open")
         p = cm.commitment_patterns(today=date(2026, 6, 16))
         self.assertEqual(p["findings"], [])
         self.assertIn("nothing notable", cm.analyze_commitments.invoke({}).lower())
