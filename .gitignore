@@ -67,6 +67,7 @@ profile.json
 .spotify_cache
 
 cost_log.json
+brain_sdk_state.json
 
 # webvoice trial: friend invite tokens
 webvoice/friends.json

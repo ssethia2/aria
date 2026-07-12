@@ -393,7 +393,18 @@ def build_agent(checkpointer=None, guest=False):
     Pass a checkpointer (open_checkpointer()) to get durable conversations; omit it
     for stateless one-shot use. guest=True builds the restricted guest agent (account-free
     toolset); invoke it only with a tenant context set (see tenant.set_current_user).
+
+    ARIA_BRAIN=subscription routes the OWNER's interactive brain through the Claude Agent
+    SDK on the Claude Code login (Max subscription) instead of API billing — guests always
+    stay on the API agent (never the owner's personal quota), and any failure here falls
+    back to the LangGraph/API brain rather than dying.
     """
+    if not guest and os.getenv("ARIA_BRAIN", "").lower() == "subscription":
+        try:
+            from brain_sdk import SubscriptionBrain
+            return SubscriptionBrain(tools=build_tools(guest=False))
+        except Exception as e:
+            print(f"[brain] subscription brain unavailable ({e}); using API brain")
     llm = get_llm(temperature=0)
     return create_agent(
         llm,
