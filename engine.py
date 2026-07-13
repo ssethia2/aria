@@ -347,6 +347,10 @@ reply owed that is several days old, or an undated commitment open for 7+ days (
 ask whether it's still happening). Never re-nudge a commitment whose last_nudged is
 within the past 3 days.
 
+An item with times_rescheduled >= 3 has been pushed repeatedly — if you mention it, be
+frank and useful: offer to either pick a REAL date or drop it, rather than nudging the
+same way a fourth time.
+
 If a nudge IS warranted, write ONE short, warm message as Aria in first person — natural
 and specific, zero nagging tone. Fold multiple items into that one message.
 
@@ -369,14 +373,18 @@ Return ONLY raw JSON (no markdown):
         if state.get("nudge_sent_date") == today:
             return []  # at most one nudge per day
 
-        from skills.commitment_manager import get_open_commitments
+        from skills.commitment_manager import get_open_commitments, slip_counts
         open_ = get_open_commitments()
+        # Snoozed items are exactly "stop bugging me until X" — honor it here.
+        open_ = [c for c in open_ if not (c.get("snoozed_until") and c["snoozed_until"] > today)]
         if not open_:
             return []
 
         nudged = state.get("nudged", {})
+        slips = slip_counts([c["id"] for c in open_])
         for c in open_:
             c["last_nudged"] = nudged.get(str(c["id"]))
+            c["times_rescheduled"] = slips.get(c["id"], 0)
 
         response = _get_llm().invoke(
             self.PROMPT.format(today=today, commitments=json.dumps(open_, indent=2)))
@@ -393,8 +401,10 @@ Return ONLY raw JSON (no markdown):
         if not verdict.get("send") or not verdict.get("message"):
             return []
 
+        from skills.commitment_manager import log_event
         for cid in verdict.get("commitment_ids", []):
             nudged[str(cid)] = today
+            log_event(cid, 'nudged')   # audit trail: which nudges preceded action vs. silence
         state["nudged"] = nudged
         state["nudge_sent_date"] = today
         return [Notification(verdict["message"])]

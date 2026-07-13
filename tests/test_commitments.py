@@ -173,5 +173,75 @@ class TestLegacyMigration(TempDBMixin, unittest.TestCase):
         self.assertEqual(len(cm.get_open_commitments()), 1)
 
 
+class TestV2EventsAndTools(TempDBMixin, unittest.TestCase):
+    """Commitment-keeper v2: event audit trail, reschedule/snooze/reopen, slip counts."""
+
+    def test_lifecycle_events_logged(self):
+        cid = cm.add("call mom", due_date="2026-08-01")
+        cm.complete(cid)
+        events = [e["event"] for e in cm.events_for(cid)]
+        self.assertEqual(events, ["created", "completed"])
+
+    def test_reschedule_moves_date_logs_and_clears_snooze(self):
+        cid = cm.add("dentist", due_date="2026-08-01")
+        cm.snooze(cid, "2026-08-15")
+        desc = cm.reschedule(cid, "2026-08-20", "14:00")
+        self.assertEqual(desc, "dentist")
+        row = cm.get_open_commitments()[0]
+        self.assertEqual((row["due_date"], row["due_time"]), ("2026-08-20", "14:00"))
+        self.assertIsNone(row["snoozed_until"])          # snooze cleared by reschedule
+        events = [e["event"] for e in cm.events_for(cid)]
+        self.assertEqual(events, ["created", "snoozed", "rescheduled"])
+        self.assertIn("2026-08-01 -> 2026-08-20 14:00", cm.events_for(cid)[-1]["detail"])
+
+    def test_slip_counts_count_reschedules(self):
+        cid = cm.add("gym", due_date="2026-08-01")
+        for d in ("2026-08-02", "2026-08-03", "2026-08-04"):
+            cm.reschedule(cid, d)
+        self.assertEqual(cm.slip_counts([cid])[cid], 3)
+
+    def test_reopen_restores_done_item_with_history(self):
+        cid = cm.add("write note for Ashley")
+        cm.complete(cid)
+        self.assertEqual(cm.get_open_commitments(), [])
+        desc = cm.reopen(cid)
+        self.assertEqual(desc, "write note for Ashley")
+        self.assertEqual(cm.get_open_commitments()[0]["id"], cid)   # same id, not a copy
+        self.assertEqual([e["event"] for e in cm.events_for(cid)],
+                         ["created", "completed", "reopened"])
+
+    def test_reopen_refuses_open_or_missing(self):
+        cid = cm.add("still open")
+        self.assertIsNone(cm.reopen(cid))      # open → nothing to reopen
+        self.assertIsNone(cm.reopen(99999))    # missing
+
+    def test_serial_reschedules_surface_in_patterns(self):
+        from datetime import date as _date
+        cid = cm.add("renew passport", due_date="2026-08-01")
+        for d in ("2026-08-05", "2026-08-10", "2026-08-15"):
+            cm.reschedule(cid, d)
+        p = cm.commitment_patterns(today=_date(2026, 7, 13))
+        self.assertEqual(p["serial_reschedules"].get(cid), 3)
+        self.assertTrue(any("rescheduled 3 times" in f for f in p["findings"]))
+
+    def test_tool_wrappers_roundtrip(self):
+        cid = cm.add("book flights", due_date="2026-08-01")
+        out = cm.reschedule_commitment.invoke({"commitment_id": cid,
+                                               "new_due_date_iso": "2026-08-09"})
+        self.assertIn("Rescheduled 'book flights' to 2026-08-09", out)
+        out = cm.snooze_commitment.invoke({"commitment_id": cid,
+                                           "until_date_iso": "2026-08-05"})
+        self.assertIn("Snoozed", out)
+        cm.complete(cid)
+        out = cm.reopen_commitment.invoke({"commitment_id": cid})
+        self.assertIn("Reopened", out)
+
+    def test_bad_dates_rejected(self):
+        self.assertIn("Error", cm.reschedule_commitment.invoke(
+            {"commitment_id": 1, "new_due_date_iso": "next friday"}))
+        self.assertIn("Error", cm.snooze_commitment.invoke(
+            {"commitment_id": 1, "until_date_iso": "08/05"}))
+
+
 if __name__ == '__main__':
     unittest.main()

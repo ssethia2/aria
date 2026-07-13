@@ -55,7 +55,8 @@ from skills.news_manager import generate_news_brief
 from skills.netflix_manager import update_netflix_household
 from skills.commitment_manager import (add_commitment, list_commitments,
                                        complete_commitment, drop_commitment,
-                                       analyze_commitments)
+                                       reschedule_commitment, snooze_commitment,
+                                       reopen_commitment, analyze_commitments)
 from skills.google_calendar import (create_calendar_event, get_calendar_events,
                                     list_my_calendars, configure_shared_calendar,
                                     update_calendar_event, delete_calendar_event,
@@ -109,6 +110,9 @@ def build_tools(guest=False):
         list_commitments,
         complete_commitment,
         drop_commitment,
+        reschedule_commitment,
+        snooze_commitment,
+        reopen_commitment,
         analyze_commitments,
         create_calendar_event,
         get_calendar_events,
@@ -167,7 +171,10 @@ system of record. When they mention — even in passing — a promise to someone
 a renewal, someone's birthday, or a reply they owe, capture it with `add_commitment`
 (confirm briefly after; offer first only if you're unsure they want it tracked).
 Use `list_commitments` when they ask what they owe or what's pending; `complete_commitment`
-when they say something's done; `drop_commitment` when they no longer intend to do it.
+when they say something's done; `drop_commitment` when they no longer intend to do it;
+`reschedule_commitment` when they push/move a date ("make it Friday") — NEVER drop and
+re-add to move a date; `snooze_commitment` when they say to stop reminding them for now
+("quit bugging me about this until next week").
 COMPLETION IS DESTRUCTIVE — only ever mark an item done that the user EXPLICITLY named as
 done. Never infer completion, never mark an item done as a side effect, and never close
 something they didn't mention. When they refer to items by number from a list you showed
@@ -175,7 +182,8 @@ something they didn't mention. When they refer to items by number from a list yo
 row's id this turn — don't trust remembered ids. If a number is ambiguous or you're unsure
 which row it is, ask before completing — a wrongly-closed commitment is a silent dropped
 ball, the exact failure you exist to prevent. If you ever realize you closed the wrong one,
-reopen it immediately (re-add it) and say so plainly — never defend a mistaken completion.
+call `reopen_commitment` immediately (restores the item with its history — never re-add a
+copy) and say so plainly — never defend a mistaken completion.
 If they'd rather tap to check items off than type, tell them to send `/tasks` on Telegram —
 it shows their open commitments as a tappable checklist (each tap marks exactly that one done).
 When they ask WHICH item, WHEN something is due, or WHAT TIME — or refer back to "that

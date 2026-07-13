@@ -154,6 +154,23 @@ class TestEngineMechanics(TempStateMixin, unittest.TestCase):
         self.assertEqual(sent, ["still alive"])
 
 
+class TestChaseSnooze(TempStateMixin, unittest.TestCase):
+    def test_snoozed_items_never_reach_the_chase_llm(self):
+        # "Stop bugging me until next week" must actually stop the bugging.
+        snoozed = [{"id": 1, "description": "renew passport", "who": None, "kind": "promise",
+                    "due_date": "2026-07-01", "due_time": None, "recurring": None,
+                    "status": "open", "source": "chat", "created_at": "2026-06-01 10:00:00",
+                    "snoozed_until": "2026-08-01"}]
+        mon = ChaseMonitor(now_fn=lambda: datetime(2026, 7, 13, 12, 0))
+        llm = MagicMock()
+        with patch("skills.commitment_manager.get_open_commitments", return_value=snoozed), \
+             patch("skills.commitment_manager.slip_counts", return_value={}), \
+             patch.object(engine, "_get_llm", return_value=llm):
+            out = mon.check({})
+        self.assertEqual(out, [])
+        llm.invoke.assert_not_called()      # nothing left to judge → no LLM call at all
+
+
 class TestNetflixQuiet(unittest.TestCase):
     def _run(self, result):
         svc = MagicMock()
