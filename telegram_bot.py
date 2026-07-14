@@ -312,6 +312,31 @@ def transcribe_voice_message(file_id: str) -> str:
     return transcribe_audio(audio, mime_type="audio/ogg")
 
 
+def _extract_photo(message):
+    """(file_id, mime) for a photo in a Telegram message, or (None, None).
+    Handles both compressed photos and images sent as documents."""
+    if message.get("photo"):
+        return message["photo"][-1]["file_id"], "image/jpeg"   # last entry = largest size
+    doc = message.get("document") or {}
+    if (doc.get("mime_type") or "").startswith("image/"):
+        return doc["file_id"], doc["mime_type"]
+    return None, None
+
+
+def see_photo(file_id: str, mime: str, caption: str) -> str:
+    """Download a photo the user sent and turn it into text the brain can act on: the
+    vision model answers the caption (or describes the image), and the composed message
+    flows through the NORMAL agent path so memory/commitments/tools all work on it."""
+    info = requests.get(f"{API}/getFile", params={"file_id": file_id}, timeout=15).json()
+    file_path = info["result"]["file_path"]
+    image = requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{file_path}",
+                         timeout=60).content
+    from llm_router import describe_image
+    seen = describe_image(image, mime, question=caption or None)
+    return (f"[I sent you a photo. What it shows: {seen}]"
+            + (f"\n\n{caption}" if caption else ""))
+
+
 def main():
     if not TOKEN:
         print("Missing TELEGRAM_BOT_TOKEN in .env. Create a bot with @BotFather first.")
@@ -389,7 +414,8 @@ def main():
                 handle_callback(update["callback_query"], allowed)
                 continue
             message = update.get("message") or update.get("edited_message")
-            if not message or not ("text" in message or "voice" in message):
+            if not message or not ("text" in message or "voice" in message
+                                   or "photo" in message or "document" in message):
                 continue
 
             chat_id = str(message["chat"]["id"])
@@ -428,6 +454,26 @@ def main():
                     continue
                 was_voice = True
                 send_message(chat_id, f"🎙️ Heard: “{text}”")
+
+            # Photos: see them AFTER the allowlist gate, then treat as text — the vision
+            # model answers the caption / describes the image, and the composed message
+            # flows through the normal agent path (memory, commitments, tools).
+            if not text:
+                file_id, mime = _extract_photo(message)
+                if file_id:
+                    try:
+                        with TypingPulse(chat_id):
+                            text = see_photo(file_id, mime,
+                                             (message.get("caption") or "").strip())
+                    except Exception as e:
+                        print(f"[photo] failed: {e}")
+                        send_message(chat_id, "I couldn't open that photo — mind sending "
+                                              "it again?")
+                        continue
+                elif "document" in message:
+                    send_message(chat_id, "I can see photos now, but not that kind of "
+                                          "file yet — send it as an image?")
+                    continue
 
             if not text:
                 continue

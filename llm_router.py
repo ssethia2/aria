@@ -151,6 +151,35 @@ def transcribe_audio(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
     return (response.text or "").strip()
 
 
+def describe_image(image_bytes: bytes, mime_type: str = "image/jpeg",
+                   question: str = None) -> str:
+    """Answer a question about (or describe) an image — the vision lens for interfaces
+    whose brain path is text-only (e.g. photos sent over Telegram). Light tier: Haiku and
+    Gemini both take image blocks, so the normal fallback chain applies. Lives here so
+    provider access stays centralized (ADR 0001)."""
+    import base64
+    from langchain_core.messages import HumanMessage
+
+    ask = (f"The user sent this photo and asked: {question!r}. Answer their question "
+           f"directly using the photo; add any detail from the image needed to act on it."
+           if question else
+           "The user sent this photo without a caption. Describe what it shows, concisely "
+           "but completely enough that an assistant could act on it (any text in the image "
+           "verbatim, items, amounts, dates).")
+    msg = HumanMessage(content=[
+        {"type": "text", "text": ask},
+        {"type": "image_url",
+         "image_url": {"url": f"data:{mime_type};base64,"
+                              f"{base64.b64encode(image_bytes).decode()}"}},
+    ])
+    resp = get_llm(tier="light").invoke([msg])
+    content = resp.content
+    if isinstance(content, list):
+        content = next((b.get("text") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"), str(content))
+    return (content or "").strip()
+
+
 def get_llm(temperature=0, tier="standard"):
     """Return a tiered ChatModel with built-in fallbacks. See module docstring for tiers.
     Carries a cost-tracking callback so every call's token usage is recorded (cost_tracker)."""
