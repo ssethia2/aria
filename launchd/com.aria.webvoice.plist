@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Aria's voice server (PWA backend): always on, restarts on crash. Binds to
+         127.0.0.1 only — the phone reaches it through Tailscale serve (or a tunnel),
+         never the open LAN/internet. Hosts NO proactivity engine, so it coexists
+         with the telegram bot. -->
+    <key>Label</key>
+    <string>com.aria.webvoice</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/satviksethia/Documents/personal-assistant/venv/bin/uvicorn</string>
+        <string>webvoice.server:app</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8800</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/satviksethia/Documents/personal-assistant</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/satviksethia/Documents/personal-assistant/logs/webvoice.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/satviksethia/Documents/personal-assistant/logs/webvoice.err.log</string>
+</dict>
+</plist>

@@ -17,10 +17,13 @@ Needs GEMINI_API_KEY (Live + token) and ANTHROPIC_API_KEY (the brain) in .env.
 """
 import os
 import json
+import base64
+import subprocess
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body, Header
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
@@ -263,3 +266,59 @@ def agent(req: AgentReq):
         return {"result": f"Sorry, I hit an error. ({e})"}
     finally:
         tenant.reset_current_user(ctx)
+
+
+# --- Push-to-talk: the FREE voice path (no paid audio APIs) ---------------------------
+# Audio in -> local Whisper STT (on the Mac) -> the brain (subscription for the owner)
+# -> local `say` TTS out as AAC/M4A (iOS-native). Gemini Live stays available behind the
+# client's mode toggle for when realtime barge-in is worth cents-per-minute.
+
+def _tts_m4a(text: str):
+    """Text -> M4A/AAC bytes via macOS `say` + `afconvert`. None if synthesis unavailable
+    (client then just shows the text reply)."""
+    import re
+    # Strip markdown the model writes for chat — asterisks/backticks/headers aren't speech.
+    text = re.sub(r"[*_`#]+", "", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)   # [label](url) -> label
+    aiff = m4a = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.aiff', delete=False) as f:
+            aiff = f.name
+        m4a = aiff.replace('.aiff', '.m4a')
+        voice = os.getenv("ARIA_TTS_VOICE")
+        cmd = ['say', '-o', aiff] + (['-v', voice] if voice else []) + [text[:3000]]
+        subprocess.run(cmd, check=True, timeout=60)
+        subprocess.run(['afconvert', '-f', 'm4af', '-d', 'aac', aiff, m4a],
+                       check=True, timeout=60)
+        with open(m4a, 'rb') as f:
+            return f.read()
+    except Exception as e:
+        print(f"[voice] tts failed: {e}")
+        return None
+    finally:
+        for p in (aiff, m4a):
+            if p and os.path.exists(p):
+                os.unlink(p)
+
+
+@app.post("/voice-turn")
+def voice_turn(t: str = "", body: bytes = Body(...),
+               content_type: str = Header("audio/mp4")):
+    """One push-to-talk turn: recorded clip in, transcript + reply + spoken audio back.
+    Same auth as /agent (owner token or invite); token is checked BEFORE any CPU is spent."""
+    if not _is_owner(t):
+        _resolve(t)                      # 403 for strangers
+    if not body or len(body) < 200:
+        raise HTTPException(status_code=400, detail="No audio received.")
+
+    from llm_router import transcribe_audio
+    heard = (transcribe_audio(bytes(body), content_type or "audio/mp4") or "").strip()
+    if not heard:
+        return {"you": "", "reply": "I couldn't make that out — try again?",
+                "audio_b64": None, "audio_mime": None}
+
+    reply = agent(AgentReq(request=heard, token=t))["result"]
+    audio = _tts_m4a(reply)
+    return {"you": heard, "reply": reply,
+            "audio_b64": base64.b64encode(audio).decode() if audio else None,
+            "audio_mime": "audio/mp4" if audio else None}

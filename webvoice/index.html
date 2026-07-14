@@ -19,6 +19,14 @@
   #start { font-size:18px; padding:14px 28px; border:0; border-radius:999px;
            background:#2f81f7; color:#fff; margin:12px 0; }
   #start:disabled { background:#30363d; }
+  #ptt { font-size:18px; padding:14px 28px; border:0; border-radius:999px;
+         background:#238636; color:#fff; margin:12px 0; }
+  #ptt.rec { background:#d73a49; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: 0.6; } }
+  #modes { display:flex; gap:8px; margin-top:8px; }
+  .mode { font-size:13px; padding:6px 12px; border-radius:999px; border:1px solid #21262d;
+          background:#0d1117; color:#8b949e; }
+  .mode.on { background:#161b22; color:#e6edf3; border-color:#2f81f7; }
   #status { font-size:13px; color:#8b949e; margin:8px 0; }
   #log { white-space:pre-wrap; font:13px ui-monospace, monospace; background:#0d1117;
          border:1px solid #21262d; border-radius:8px; padding:10px; height:48vh;
@@ -57,6 +65,11 @@
       <button class="ex" type="button">What can you do?</button>
     </div>
   </div>
+  <div id="modes">
+    <button id="mode-ptt" class="mode" type="button">📻 Push-to-talk (free)</button>
+    <button id="mode-live" class="mode" type="button">🎙️ Live conversation</button>
+  </div>
+  <button id="ptt">🎤 Tap to record</button>
   <button id="start">Tap to start talking</button>
   <div id="status">idle</div>
   <div id="log"></div>
@@ -310,6 +323,70 @@ async function setupPush() {        // call from a user gesture (Start / Send)
     log("🔔 reminders will notify this device", "sys");
   } catch (e) { pushReady = false; console.log("push setup failed", e); }
 }
+
+// ---------- push-to-talk: the FREE voice path (no Gemini Live billing) ----------
+// Tap to record -> clip goes to the Mac (local Whisper STT -> subscription brain ->
+// local TTS) -> spoken reply plays back. Live mode stays one toggle away.
+let mode = localStorage.getItem("aria_mode") || "ptt";
+function setMode(m) {
+  mode = m; localStorage.setItem("aria_mode", m);
+  $("ptt").style.display   = m === "ptt"  ? "" : "none";
+  $("start").style.display = m === "live" ? "" : "none";
+  $("mode-ptt").classList.toggle("on", m === "ptt");
+  $("mode-live").classList.toggle("on", m === "live");
+  setStatus(m === "ptt" ? "free voice — tap the mic and talk"
+                        : "live mode — realtime, billed per minute");
+}
+$("mode-ptt").addEventListener("click", () => setMode("ptt"));
+$("mode-live").addEventListener("click", () => setMode("live"));
+setMode(mode);
+
+let rec = null, recChunks = [], recStream = null;
+async function pttTap() {
+  setupPush();
+  if (!playCtx) playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  await playCtx.resume();                      // unlock playback inside the tap gesture
+  if (rec && rec.state === "recording") { rec.stop(); return; }   // second tap = send
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) { log("mic denied: " + (e?.message || e), "err"); return; }
+  recChunks = [];
+  rec = new MediaRecorder(recStream);
+  rec.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+  rec.onstop = sendClip;
+  rec.start();
+  $("ptt").textContent = "⏹️ Tap to send"; $("ptt").classList.add("rec");
+  setStatus("listening… tap again when done");
+}
+
+async function sendClip() {
+  $("ptt").textContent = "🎤 Tap to record"; $("ptt").classList.remove("rec");
+  try { recStream.getTracks().forEach((tr) => tr.stop()); } catch (e) {}
+  const blob = new Blob(recChunks, { type: rec.mimeType || "audio/mp4" });
+  if (blob.size < 1000) { setStatus("too short — tap and talk"); return; }
+  setStatus("thinking…");
+  try {
+    const r = await fetch("/voice-turn?t=" + encodeURIComponent(invite),
+                          { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+    if (!r.ok) {
+      let msg = "voice error (" + r.status + ")";
+      try { const j = await r.json(); if (j.detail) msg = j.detail; } catch (e) {}
+      log(msg, "err"); setStatus("error — try again"); return;
+    }
+    const j = await r.json();
+    if (j.you) log("you: " + j.you, "you");
+    log("aria: " + j.reply, "aria");
+    if (j.audio_b64) {
+      const bin = atob(j.audio_b64), u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const buf = await playCtx.decodeAudioData(u8.buffer);
+      const src = playCtx.createBufferSource();
+      src.buffer = buf; src.connect(playCtx.destination); src.start();
+    }
+    setStatus("free voice — tap the mic and talk");
+  } catch (e) { log("voice send failed: " + e, "err"); setStatus("error — try again"); }
+}
+$("ptt").addEventListener("click", pttTap);
 
 $("start").addEventListener("click", () => { setupPush(); start(); });
 </script>

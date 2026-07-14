@@ -19,7 +19,9 @@ python3 imessage_bot.py # chat via iMessage on a Mac (polls Messages; needs IMES
 python3 interact.py     # local terminal chat
 python3 voice.py        # local voice REPL (on-device Whisper STT + say/piper TTS; --ptt)
 python3 voice_live.py   # realtime Gemini Live voice (barge-in; escalate_to_aria → brain)
-webvoice/run.sh         # browser/phone voice client (Live in-browser) + HTTPS tunnel (cloudflared)
+webvoice/run.sh         # browser/phone voice client + HTTPS tunnel (ad-hoc; the always-on way
+                        # is the com.aria.webvoice launchd service + Tailscale serve. Client
+                        # defaults to FREE push-to-talk (local Whisper+say); Gemini Live is a toggle)
 ./run.sh                # nightly compaction + morning briefing email (cron entry point)
 python3 clean_inbox.py  # one-shot bulk inbox cleanup
 python3 aria_server.py  # FastAPI webhook server on :8000

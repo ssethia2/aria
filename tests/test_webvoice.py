@@ -129,5 +129,68 @@ class TestWebvoiceAuth(unittest.TestCase):
                 server._user_for("nope")
 
 
+class TestVoiceTurn(unittest.TestCase):
+    """Push-to-talk /voice-turn: the free STT->brain->TTS path."""
+
+    def setUp(self):
+        self.client = TestClient(server.app)
+
+    def test_bad_token_rejected_before_any_work(self):
+        with patch.object(server, "OWNER_TOKEN", None), \
+             patch.object(server, "_friends", return_value={}), \
+             patch("llm_router.transcribe_audio") as stt:
+            r = self.client.post("/voice-turn?t=bad",
+                                 content=b"x" * 500,
+                                 headers={"Content-Type": "audio/mp4"})
+        self.assertEqual(r.status_code, 403)
+        stt.assert_not_called()          # no CPU spent on strangers
+
+    def test_owner_roundtrip_transcript_reply_audio(self):
+        with patch.object(server, "OWNER_TOKEN", "sec"), \
+             patch("llm_router.transcribe_audio", return_value="how many commitments"), \
+             patch.object(server, "agent", return_value={"result": "Eleven."}) as brain, \
+             patch.object(server, "_tts_m4a", return_value=b"FAKEAAC"):
+            r = self.client.post("/voice-turn?t=sec",
+                                 content=b"x" * 500,
+                                 headers={"Content-Type": "audio/mp4"})
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertEqual(j["you"], "how many commitments")
+        self.assertEqual(j["reply"], "Eleven.")
+        import base64 as b64
+        self.assertEqual(b64.b64decode(j["audio_b64"]), b"FAKEAAC")
+        self.assertEqual(brain.call_args[0][0].request, "how many commitments")
+        self.assertEqual(brain.call_args[0][0].token, "sec")
+
+    def test_unintelligible_audio_returns_friendly_retry(self):
+        with patch.object(server, "OWNER_TOKEN", "sec"), \
+             patch("llm_router.transcribe_audio", return_value="  "), \
+             patch.object(server, "agent") as brain:
+            r = self.client.post("/voice-turn?t=sec",
+                                 content=b"x" * 500,
+                                 headers={"Content-Type": "audio/mp4"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("try again", r.json()["reply"].lower())
+        brain.assert_not_called()
+
+    def test_tts_failure_still_returns_text(self):
+        with patch.object(server, "OWNER_TOKEN", "sec"), \
+             patch("llm_router.transcribe_audio", return_value="hello"), \
+             patch.object(server, "agent", return_value={"result": "Hi!"}), \
+             patch.object(server, "_tts_m4a", return_value=None):
+            r = self.client.post("/voice-turn?t=sec",
+                                 content=b"x" * 500,
+                                 headers={"Content-Type": "audio/mp4"})
+        j = r.json()
+        self.assertEqual(j["reply"], "Hi!")
+        self.assertIsNone(j["audio_b64"])    # voice degraded, text intact
+
+    def test_tiny_body_rejected(self):
+        with patch.object(server, "OWNER_TOKEN", "sec"):
+            r = self.client.post("/voice-turn?t=sec", content=b"xx",
+                                 headers={"Content-Type": "audio/mp4"})
+        self.assertEqual(r.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()
