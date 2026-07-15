@@ -173,6 +173,70 @@ class TestRuntimeFallback(TempState):
         self.assertNotIsInstance(agent, SubscriptionBrain)
 
 
+class TestHistoryBridge(TempState):
+    """The two one-way bridges: fallback turns see recent subscription context; the next
+    subscription turn absorbs the fallback exchanges."""
+
+    def test_fallback_prompt_carries_recent_conversation(self):
+        b = _brain()
+        cfg = {"configurable": {"thread_id": "hb1"}}
+        # seed the mirror with subscription-era turns
+        b.update_state(cfg, {"messages": [HumanMessage(content="remind me about the dentist"),
+                                          AIMessage(content="Tracked for Friday 3pm.")]})
+        api = MagicMock()
+        api.invoke.return_value = {"messages": [AIMessage(content="fallback reply")]}
+        with patch.object(SubscriptionBrain, "_run_turn",
+                          side_effect=brain_sdk.BrainUnavailable("limit")), \
+             patch.object(brain_sdk, "_api_fallback_agent", return_value=api), \
+             patch.object(brain_sdk, "_fallback_alert"):
+            b.invoke({"messages": [HumanMessage(content="when was that again?")]}, config=cfg)
+        sent = api.invoke.call_args[0][0]["messages"][0].content
+        self.assertIn("<recent_conversation>", sent)
+        self.assertIn("Tracked for Friday 3pm.", sent)     # sub-era context bridged in
+        self.assertIn("when was that again?", sent)
+
+    def test_next_subscription_turn_absorbs_fallback_gap_then_clears(self):
+        b = _brain()
+        cfg = {"configurable": {"thread_id": "hb2"}}
+        api = MagicMock()
+        api.invoke.return_value = {"messages": [AIMessage(content="It's Friday at 3pm.")]}
+        with patch.object(SubscriptionBrain, "_run_turn",
+                          side_effect=brain_sdk.BrainUnavailable("limit")), \
+             patch.object(brain_sdk, "_api_fallback_agent", return_value=api), \
+             patch.object(brain_sdk, "_fallback_alert"):
+            b.invoke({"messages": [HumanMessage(content="when is the dentist?")]}, config=cfg)
+
+        # subscription comes back: the SDK prompt must carry the missed exchange
+        prompts = []
+
+        def fake_query(prompt=None, options=None):
+            prompts.append(prompt)
+            class _Gen:
+                def __aiter__(self):
+                    return self
+                async def __anext__(self):
+                    raise StopAsyncIteration
+            return _Gen()
+
+        def fake_anyio_run(fn):
+            import asyncio
+            asyncio.run(fn())
+
+        with patch("claude_agent_sdk.query", fake_query), \
+             patch.object(brain_sdk.anyio, "run", fake_anyio_run):
+            with self.assertRaises(brain_sdk.BrainUnavailable):
+                b._run_turn("hb2", "thanks!")     # no reply from fake query — but prompt sent
+        self.assertIn("<missed_context>", prompts[0])
+        self.assertIn("It's Friday at 3pm.", prompts[0])   # the fallback exchange
+        self.assertIn("thanks!", prompts[0])
+
+        # unsynced survives a FAILED sub turn (cleared only on success)
+        with patch.object(brain_sdk, "STATE_PATH", brain_sdk.STATE_PATH):
+            import json
+            st = json.loads(brain_sdk.STATE_PATH.read_text())
+        self.assertTrue(st["threads"]["hb2"]["unsynced"])
+
+
 class TestRouting(unittest.TestCase):
     def test_guest_never_gets_subscription_brain(self):
         import agent_core

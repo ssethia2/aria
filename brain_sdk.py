@@ -61,6 +61,31 @@ class BrainUnavailable(Exception):
     the caller should serve this turn from the API fallback agent instead of dying."""
 
 
+CONTEXT_TURNS = 10   # mirror turns bridged into a fallback turn's prompt
+
+
+def _recent_context(thread_id: str, limit: int = CONTEXT_TURNS) -> str:
+    """The last few conversation turns from the unified mirror (both engines write it) —
+    the bridge that lets a fallback turn pick up mid-conversation."""
+    with _lock:
+        mirror = _load_state().get("threads", {}).get(thread_id, {}).get("messages", [])
+    return "\n".join(
+        f"{'User' if m.get('type') == 'human' else 'Aria'}: {(m.get('content') or '')[:400]}"
+        for m in mirror[-limit:])
+
+
+def _queue_unsynced(thread_id: str, user_text: str, reply: str):
+    """Record a fallback-served exchange so the NEXT subscription turn can absorb it
+    (the SDK session never saw it)."""
+    with _lock:
+        state = _load_state()
+        th = state.setdefault("threads", {}).setdefault(thread_id, {})
+        th.setdefault("unsynced", []).append(
+            {"you": user_text[:400], "aria": (reply or "")[:400]})
+        th["unsynced"] = th["unsynced"][-8:]
+        _save_state(state)
+
+
 _fallback = {"agent": None, "alerted": None}
 
 
@@ -176,13 +201,25 @@ class SubscriptionBrain:
 
         with _lock:
             state = _load_state()
-            session = state.get("threads", {}).get(thread_id, {}).get("session_id")
+            th = state.get("threads", {}).get(thread_id, {})
+            session = th.get("session_id")
+            unsynced = list(th.get("unsynced", []))
+
+        # Bridge: exchanges served by the API fallback while the subscription was limited
+        # are absorbed into this turn's prompt, then cleared on success — so the SDK
+        # session regains continuity instead of a hole.
+        prompt = text
+        if unsynced:
+            gap = "\n".join(f"User: {u['you']}\nAria: {u['aria']}" for u in unsynced)
+            prompt = (f"<missed_context>While you were unavailable, these exchanges were "
+                      f"handled for you (already answered — context only, do not re-answer):"
+                      f"\n{gap}</missed_context>\n\n{text}")
 
         result = {"reply": None, "session_id": session}
 
         async def go():
             opts = self._options(resume=session)
-            async for msg in query(prompt=text, options=opts):
+            async for msg in query(prompt=prompt, options=opts):
                 t = type(msg).__name__
                 if t == "SystemMessage" and getattr(msg, "subtype", "") == "init":
                     sid = msg.data.get("session_id")
@@ -230,6 +267,7 @@ class SubscriptionBrain:
             state = _load_state()
             th = state.setdefault("threads", {}).setdefault(thread_id, {})
             th["session_id"] = result["session_id"]
+            th["unsynced"] = []          # the gap is absorbed — clear only on success
             mirror = th.setdefault("messages", [])
             mirror.extend([{"type": "human", "content": text},
                            {"type": "ai", "content": reply}])
@@ -263,19 +301,32 @@ class SubscriptionBrain:
         msgs = (payload or {}).get("messages", [])
         return getattr(msgs[-1], "content", "") if msgs else ""
 
+    @staticmethod
+    def _bridged_payload(text: str, ctx: str):
+        """The fallback turn's payload, carrying recent cross-engine context so the API
+        agent picks up mid-conversation instead of amnesiac."""
+        if not ctx:
+            return {"messages": [HumanMessage(content=text)]}
+        return {"messages": [HumanMessage(content=(
+            f"<recent_conversation>For continuity — the most recent exchanges (from a "
+            f"session this thread can't see):\n{ctx}</recent_conversation>\n\n{text}"))]}
+
     def invoke(self, payload, config=None):
         text = self._text_of(payload)
+        thread = self._thread_of(config)
         try:
-            reply = self._run_turn(self._thread_of(config), text)
+            reply = self._run_turn(thread, text)
             return {"messages": [AIMessage(content=reply)]}
         except BrainUnavailable as e:
             _fallback_alert(str(e))
-            out = _api_fallback_agent().invoke(payload, config)
-            try:  # keep the fast-path context mirror fresh even on fallback turns
+            ctx = _recent_context(thread)          # read BEFORE this turn hits the mirror
+            out = _api_fallback_agent().invoke(self._bridged_payload(text, ctx), config)
+            try:
                 from agent_core import extract_text
+                reply_text = extract_text(out["messages"][-1].content)
+                _queue_unsynced(thread, text, reply_text)   # next sub turn absorbs the gap
                 self.update_state(config, {"messages": [
-                    HumanMessage(content=text),
-                    AIMessage(content=extract_text(out["messages"][-1].content))]})
+                    HumanMessage(content=text), AIMessage(content=reply_text)]})
             except Exception:
                 pass
             return out
@@ -286,13 +337,30 @@ class SubscriptionBrain:
         text yields as a plain AIMessage. On subscription failure the whole turn streams
         from the API fallback agent (its chunks ARE native LangGraph updates)."""
         events = []
+        text = self._text_of(payload)
+        thread = self._thread_of(config)
         try:
-            reply = self._run_turn(self._thread_of(config), self._text_of(payload),
+            reply = self._run_turn(thread, text,
                                    on_tool=lambda name: events.append(name))
         except BrainUnavailable as e:
             _fallback_alert(str(e))
-            yield from _api_fallback_agent().stream(payload, config=config,
-                                                    stream_mode=stream_mode)
+            from agent_core import extract_text
+            ctx = _recent_context(thread)
+            final = None
+            for chunk in _api_fallback_agent().stream(self._bridged_payload(text, ctx),
+                                                      config=config, stream_mode=stream_mode):
+                for _node, update in (chunk or {}).items():
+                    if isinstance(update, dict):
+                        for m in update.get("messages", []) or []:
+                            if isinstance(m, AIMessage) and not (getattr(m, "tool_calls", None) or []):
+                                t = extract_text(m.content)
+                                if t and t.strip():
+                                    final = t
+                yield chunk
+            if final:
+                _queue_unsynced(thread, text, final)
+                self.update_state(config, {"messages": [
+                    HumanMessage(content=text), AIMessage(content=final)]})
             return
         for name in events:
             yield {"agent": {"messages": [
