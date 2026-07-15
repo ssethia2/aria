@@ -57,7 +57,7 @@ class TestDescribeImage(unittest.TestCase):
         with patch.object(llm_router, "get_llm", return_value=llm) as gl:
             out = llm_router.describe_image(b"\x89PNG", "image/png", question="what is it?")
         self.assertEqual(out, "a cat")
-        gl.assert_called_once_with(tier="light")
+        gl.assert_called_once_with(tier="standard")   # real photos need real vision (Sonnet)
         blocks = llm.invoke.call_args[0][0][0].content
         self.assertIn("what is it?", blocks[0]["text"])
         self.assertTrue(blocks[1]["image_url"]["url"].startswith("data:image/png;base64,"))

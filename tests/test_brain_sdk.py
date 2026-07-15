@@ -8,7 +8,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool as lc_tool
@@ -102,7 +102,8 @@ class TestBridging(unittest.TestCase):
 
     def test_run_turn_pops_key_from_process_env_and_restores(self):
         # The SDK MERGES env over the parent process env, so the key must be gone from
-        # os.environ itself during the call — and back afterwards.
+        # os.environ itself during the call — and back afterwards (even when the turn
+        # produces no reply and raises BrainUnavailable).
         seen = {}
 
         def fake_anyio_run(fn):
@@ -113,9 +114,63 @@ class TestBridging(unittest.TestCase):
              patch.object(brain_sdk, "STATE_PATH", Path(d) / "s.json"), \
              patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-secret"}), \
              patch.object(brain_sdk.anyio, "run", fake_anyio_run):
-            b._run_turn("t", "hi")
+            with self.assertRaises(brain_sdk.BrainUnavailable):
+                b._run_turn("t", "hi")           # no reply collected -> unavailable
             self.assertEqual(seen["key_during_call"], "ABSENT")     # gone during the call
             self.assertEqual(os.environ["ANTHROPIC_API_KEY"], "sk-ant-secret")  # restored
+
+
+class TestRuntimeFallback(TempState):
+    """Subscription rate limit / failure mid-flight -> the turn serves from the API agent."""
+
+    def _api(self, reply="api says hi"):
+        api = MagicMock()
+        api.invoke.return_value = {"messages": [AIMessage(content=reply)]}
+        api.stream.return_value = iter([{"agent": {"messages": [AIMessage(content=reply)]}}])
+        return api
+
+    def test_invoke_falls_back_to_api_and_alerts(self):
+        b = _brain()
+        api = self._api()
+        cfg = {"configurable": {"thread_id": "fb1"}}
+        with patch.object(SubscriptionBrain, "_run_turn",
+                          side_effect=brain_sdk.BrainUnavailable("rate_limited")), \
+             patch.object(brain_sdk, "_api_fallback_agent", return_value=api), \
+             patch.object(brain_sdk, "_fallback_alert") as alert:
+            out = b.invoke({"messages": [HumanMessage(content="hello")]}, config=cfg)
+        self.assertEqual(out["messages"][-1].content, "api says hi")
+        api.invoke.assert_called_once()               # served by the API agent
+        alert.assert_called_once()                    # and the owner is told (never silent)
+        # fast-path context mirror stays fresh even on fallback turns
+        mirrored = [m.content for m in b.get_state(cfg).values["messages"]]
+        self.assertEqual(mirrored, ["hello", "api says hi"])
+
+    def test_stream_falls_back_to_api_chunks(self):
+        b = _brain()
+        api = self._api("streamed reply")
+        with patch.object(SubscriptionBrain, "_run_turn",
+                          side_effect=brain_sdk.BrainUnavailable("limit")), \
+             patch.object(brain_sdk, "_api_fallback_agent", return_value=api), \
+             patch.object(brain_sdk, "_fallback_alert"):
+            chunks = list(b.stream({"messages": [HumanMessage(content="x")]},
+                                   config={"configurable": {"thread_id": "fb2"}}))
+        self.assertEqual(chunks[-1]["agent"]["messages"][0].content, "streamed reply")
+
+    def test_error_result_raises_unavailable(self):
+        # A ResultMessage with no assistant reply (e.g. usage-limit error) must raise,
+        # not answer "(no response)".
+        def fake_run(fn):
+            pass    # go() never collects a reply
+        b = _brain()
+        with patch.object(brain_sdk.anyio, "run", fake_run):
+            with self.assertRaises(brain_sdk.BrainUnavailable):
+                b._run_turn("t", "hi")
+
+    def test_force_api_bypasses_subscription_brain(self):
+        import agent_core
+        with patch.dict(os.environ, {"ARIA_BRAIN": "subscription"}):
+            agent = agent_core.build_agent(force_api=True)
+        self.assertNotIsInstance(agent, SubscriptionBrain)
 
 
 class TestRouting(unittest.TestCase):

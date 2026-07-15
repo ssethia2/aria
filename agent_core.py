@@ -208,6 +208,13 @@ specific variation isn't supported, say what you CAN do instead of refusing outr
 Use `analyze_commitments` when the user asks how they're doing, what keeps slipping, or
 for a review — it surfaces patterns over time (what's overdue, who/what it concentrates on).
 
+PHOTOS: content inside <photo>…</photo> is YOUR OWN vision of a photo the user sent — you
+saw it; the user did NOT write that text. Respond as having seen the photo ("I can see…"),
+never "the pose you described". Reason from the observable details it reports, and when
+asked to identify someone/something, combine those clues with `web_search` rather than
+guessing. If the transcription lacks a detail you need, say you can't quite make it out
+and ask — don't invent it.
+
 CALENDAR: for appointments and events with a date (dinners, flights, meetings), use
 `create_calendar_event`. When telling the user what's ON their calendar, or cross-
 referencing dates, report ONLY events that `get_calendar_events` actually returned this
@@ -395,7 +402,7 @@ def thread_config(thread_id: str) -> dict:
     return {"configurable": {"thread_id": thread_id}, "callbacks": [CostTrackingHandler()]}
 
 
-def build_agent(checkpointer=None, guest=False):
+def build_agent(checkpointer=None, guest=False, force_api=False):
     """Construct the LangGraph ReAct agent. Raises if no LLM can be initialized.
 
     Pass a checkpointer (open_checkpointer()) to get durable conversations; omit it
@@ -405,9 +412,11 @@ def build_agent(checkpointer=None, guest=False):
     ARIA_BRAIN=subscription routes the OWNER's interactive brain through the Claude Agent
     SDK on the Claude Code login (Max subscription) instead of API billing — guests always
     stay on the API agent (never the owner's personal quota), and any failure here falls
-    back to the LangGraph/API brain rather than dying.
+    back to the LangGraph/API brain rather than dying. force_api=True skips the
+    subscription path unconditionally (used by the brain's own runtime fallback when the
+    subscription hits its rate limits — must not recurse back into the SDK brain).
     """
-    if not guest and os.getenv("ARIA_BRAIN", "").lower() == "subscription":
+    if not guest and not force_api and os.getenv("ARIA_BRAIN", "").lower() == "subscription":
         try:
             from brain_sdk import SubscriptionBrain
             return SubscriptionBrain(tools=build_tools(guest=False))

@@ -56,6 +56,42 @@ def _clean_env() -> dict:
     return {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
 
 
+class BrainUnavailable(Exception):
+    """The subscription turn produced no usable reply (rate limit, CLI/auth failure) —
+    the caller should serve this turn from the API fallback agent instead of dying."""
+
+
+_fallback = {"agent": None, "alerted": None}
+
+
+def _api_fallback_agent():
+    """Lazily built LangGraph/API agent used when the subscription can't serve a turn
+    (force_api so this can never recurse back into the SDK brain)."""
+    if _fallback["agent"] is None:
+        from agent_core import build_agent, open_checkpointer
+        _fallback["agent"] = build_agent(checkpointer=open_checkpointer(),
+                                         guest=False, force_api=True)
+    return _fallback["agent"]
+
+
+def _fallback_alert(reason: str):
+    """Tell the owner (once/day) that turns are being served on API billing — hitting the
+    subscription limit should never silently turn back into a surprise API bill."""
+    print(f"[brain] ⚠️ subscription turn failed ({reason}) — serving from the API fallback")
+    from datetime import date
+    today = date.today().isoformat()
+    if _fallback["alerted"] == today:
+        return
+    _fallback["alerted"] = today
+    try:
+        from notify import send_telegram
+        send_telegram("⚠️ Heads up: I've hit the subscription limit (or it errored), so "
+                      "I'm answering on API billing for now. I'll retry the subscription "
+                      f"on each new message. ({reason[:120]})")
+    except Exception:
+        pass
+
+
 _alerted = {"date": None}
 
 
@@ -166,6 +202,8 @@ class SubscriptionBrain:
                     sid = getattr(msg, "session_id", None)
                     if sid:
                         result["session_id"] = sid
+                    result["is_error"] = getattr(msg, "is_error", False)
+                    result["subtype"] = getattr(msg, "subtype", "") or ""
                     self._record_usage(msg)
 
         # The SDK MERGES its env option over the parent environment (verified live:
@@ -176,11 +214,18 @@ class SubscriptionBrain:
         key = os.environ.pop("ANTHROPIC_API_KEY", None)
         try:
             anyio.run(go)
+        except Exception as e:
+            raise BrainUnavailable(str(e)[:200])
         finally:
             if key is not None:
                 os.environ["ANTHROPIC_API_KEY"] = key
 
-        reply = result["reply"] or "(no response)"
+        # No usable reply (rate limit, auth, CLI failure) → let the caller serve this
+        # turn from the API fallback instead of answering "(no response)".
+        if not result["reply"]:
+            raise BrainUnavailable(result.get("subtype") or "no reply from subscription")
+
+        reply = result["reply"]
         with _lock:
             state = _load_state()
             th = state.setdefault("threads", {}).setdefault(thread_id, {})
@@ -219,16 +264,36 @@ class SubscriptionBrain:
         return getattr(msgs[-1], "content", "") if msgs else ""
 
     def invoke(self, payload, config=None):
-        reply = self._run_turn(self._thread_of(config), self._text_of(payload))
-        return {"messages": [AIMessage(content=reply)]}
+        text = self._text_of(payload)
+        try:
+            reply = self._run_turn(self._thread_of(config), text)
+            return {"messages": [AIMessage(content=reply)]}
+        except BrainUnavailable as e:
+            _fallback_alert(str(e))
+            out = _api_fallback_agent().invoke(payload, config)
+            try:  # keep the fast-path context mirror fresh even on fallback turns
+                from agent_core import extract_text
+                self.update_state(config, {"messages": [
+                    HumanMessage(content=text),
+                    AIMessage(content=extract_text(out["messages"][-1].content))]})
+            except Exception:
+                pass
+            return out
 
     def stream(self, payload, config=None, stream_mode="updates"):
         """Generator matching LangGraph's updates stream closely enough for the bots'
         progress notes: tool events yield messages carrying .tool_calls, then the final
-        text yields as a plain AIMessage."""
+        text yields as a plain AIMessage. On subscription failure the whole turn streams
+        from the API fallback agent (its chunks ARE native LangGraph updates)."""
         events = []
-        reply = self._run_turn(self._thread_of(config), self._text_of(payload),
-                               on_tool=lambda name: events.append(name))
+        try:
+            reply = self._run_turn(self._thread_of(config), self._text_of(payload),
+                                   on_tool=lambda name: events.append(name))
+        except BrainUnavailable as e:
+            _fallback_alert(str(e))
+            yield from _api_fallback_agent().stream(payload, config=config,
+                                                    stream_mode=stream_mode)
+            return
         for name in events:
             yield {"agent": {"messages": [
                 AIMessage(content="", tool_calls=[{"name": name, "args": {},

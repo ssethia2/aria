@@ -333,8 +333,11 @@ def see_photo(file_id: str, mime: str, caption: str) -> str:
                          timeout=60).content
     from llm_router import describe_image
     seen = describe_image(image, mime, question=caption or None)
-    return (f"[I sent you a photo. What it shows: {seen}]"
-            + (f"\n\n{caption}" if caption else ""))
+    # Framed as ARIA's own sight — not something the user typed — so she says "I can see…",
+    # never "the pose you've described".
+    return (f"<photo>The user sent a photo. YOUR vision of it (you saw this yourself; "
+            f"the user did not write this): {seen}</photo>"
+            + (f"\n\n{caption}" if caption else "\n\n(no caption — react to the photo)"))
 
 
 def main():
@@ -458,6 +461,7 @@ def main():
             # Photos: see them AFTER the allowlist gate, then treat as text — the vision
             # model answers the caption / describes the image, and the composed message
             # flows through the normal agent path (memory, commitments, tools).
+            was_photo = False
             if not text:
                 file_id, mime = _extract_photo(message)
                 if file_id:
@@ -465,6 +469,7 @@ def main():
                         with TypingPulse(chat_id):
                             text = see_photo(file_id, mime,
                                              (message.get("caption") or "").strip())
+                            was_photo = True
                     except Exception as e:
                         print(f"[photo] failed: {e}")
                         send_message(chat_id, "I couldn't open that photo — mind sending "
@@ -494,7 +499,10 @@ def main():
                 with TypingPulse(chat_id):
                     # Fast path first: a quick general-knowledge answer skips the full
                     # agent. None means "needs tools/data/current info" → full agent.
-                    reply = quick_answer(agent, f"telegram-{chat_id}", text)
+                    # Photo turns always get the FULL brain (web_search etc. for "who/what
+                    # is this") — the cheap fast-path answered photo questions from the
+                    # transcription alone and got them confidently wrong.
+                    reply = None if was_photo else quick_answer(agent, f"telegram-{chat_id}", text)
                     if reply is None:
                         reply = run_agent_streaming(agent, chat_id, text)
             except Exception as e:
