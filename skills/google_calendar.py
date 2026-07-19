@@ -352,20 +352,35 @@ def delete_calendar_event(query: str, date_iso: str = None) -> str:
 
 
 @tool
-def get_calendar_events(days: int = 1) -> str:
-    """The user's upcoming events from both calendars (deduplicated). days=1 means
-    today; 7 means the next week. Use when asked what's on the calendar/schedule."""
-    events = fetch_events(days)
+def get_calendar_events(days: int = 1, calendar: str = 'both') -> str:
+    """The user's upcoming events. days=1 means today; 7 the next week; 90 for ~3 months.
+
+    Args:
+        days: How far ahead to look.
+        calendar: 'both' (default — merged, dual-written copies collapsed, events only on
+            the shared calendar tagged '[shared only]' — those are Ashley's/joint events),
+            'personal' (his calendar only), or 'shared' (the shared calendar only — use
+            when asked what's ON the shared calendar or about Ashley's events).
+    """
+    if calendar not in ('both', 'personal', 'shared'):
+        return "Error: calendar must be 'both', 'personal', or 'shared'."
+    events = fetch_events(days, calendar=calendar)
     if events is None:
         return "Calendar isn't connected yet — the Google token needs the calendar scopes (re-auth required)."
     if not events:
-        return "Nothing on the calendar in that window."
-    return "Calendar:\n" + "\n".join(f"- {e}" for e in events)
+        return f"Nothing on the {calendar if calendar != 'both' else ''} calendar in that window.".replace("  ", " ")
+    label = {"both": "Calendar", "personal": "Personal calendar", "shared": "Shared calendar"}[calendar]
+    return f"{label}:\n" + "\n".join(f"- {e}" for e in events)
 
 
-def fetch_events(days: int = 1):
-    """Deduped event lines across personal + shared, for tools and the briefing.
-    Returns None when the service isn't available."""
+def fetch_events(days: int = 1, calendar: str = 'both'):
+    """Event lines for tools and the briefing. Returns None when the service isn't there.
+
+    calendar='both' (default): personal + shared merged, dual-written copies collapsed to
+    one line, and events that exist ONLY on the shared calendar tagged '[shared only]' —
+    per the user's rule those are Ashley's/joint events, and the tag preserves what the
+    dedup used to erase. 'personal' / 'shared' scope to a single calendar (no dedup —
+    what's on that calendar is exactly what you get)."""
     service = get_calendar_service()
     if not service:
         return None
@@ -373,13 +388,18 @@ def fetch_events(days: int = 1):
     time_min = now.isoformat()
     time_max = (now + timedelta(days=days)).replace(hour=23, minute=59).isoformat()
 
-    calendar_ids = ['primary']
     shared_id = _load_config().get('shared_calendar_id')
-    if shared_id:
-        calendar_ids.append(shared_id)
+    sources = []
+    if calendar in ('both', 'personal'):
+        sources.append(('personal', 'primary'))
+    if calendar in ('both', 'shared'):
+        if shared_id:
+            sources.append(('shared', shared_id))
+        elif calendar == 'shared':
+            return []          # shared not configured — nothing to show, not an error
 
-    seen, lines = set(), []
-    for cal_id in calendar_ids:
+    found = {}                 # key -> {"when","summary","start","cals":set}
+    for cal_name, cal_id in sources:
         try:
             items = service.events().list(
                 calendarId=cal_id, timeMin=time_min, timeMax=time_max,
@@ -390,14 +410,18 @@ def fetch_events(days: int = 1):
         for ev in items:
             start = ev.get('start', {})
             when = start.get('dateTime', start.get('date', ''))
-            key = (ev.get('summary'), when)   # dual-written events collapse to one line
-            if key in seen:
-                continue
-            seen.add(key)
-            if 'dateTime' in start:
-                dt = datetime.fromisoformat(when)
-                label = dt.strftime('%a %H:%M')
-            else:
-                label = datetime.fromisoformat(when).strftime('%a') + " (all day)"
-            lines.append(f"{label} — {ev.get('summary', '(no title)')}")
+            key = (ev.get('summary'), when)   # dual-written events collapse to one entry
+            entry = found.setdefault(key, {"when": when, "start": start,
+                                           "summary": ev.get('summary', '(no title)'),
+                                           "cals": set()})
+            entry["cals"].add(cal_name)
+
+    lines = []
+    for e in sorted(found.values(), key=lambda x: x["when"]):   # chronological across cals
+        if 'dateTime' in e["start"]:
+            label = datetime.fromisoformat(e["when"]).strftime('%a %H:%M')
+        else:
+            label = datetime.fromisoformat(e["when"]).strftime('%a') + " (all day)"
+        tag = " [shared only]" if (calendar == 'both' and e["cals"] == {'shared'}) else ""
+        lines.append(f"{label} — {e['summary']}{tag}")
     return lines

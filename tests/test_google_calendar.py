@@ -119,6 +119,53 @@ class TestFetchDedupe(TempConfigMixin, unittest.TestCase):
         with patch.object(gc, 'get_calendar_service', return_value=None):
             self.assertIsNone(gc.fetch_events())
 
+    def _two_calendar_service(self):
+        """personal has 'Dentist' + mirrored 'Dinner'; shared has 'Dinner' + Ashley's
+        'Girls night' (shared-only)."""
+        service = MagicMock()
+        dinner = {'summary': 'Dinner', 'start': {'dateTime': '2026-07-20T19:00:00-04:00'}}
+        dentist = {'summary': 'Dentist', 'start': {'dateTime': '2026-07-20T09:00:00-04:00'}}
+        girls = {'summary': 'Girls night', 'start': {'dateTime': '2026-07-21T20:00:00-04:00'}}
+
+        def list_events(calendarId=None, **kw):
+            items = [dentist, dinner] if calendarId == 'primary' else [dinner, girls]
+            m = MagicMock(); m.execute.return_value = {'items': items}
+            return m
+
+        service.events.return_value.list.side_effect = list_events
+        return service
+
+    def test_shared_only_events_are_tagged_in_merged_view(self):
+        gc._save_config({'shared_calendar_id': 'gf123'})
+        with patch.object(gc, 'get_calendar_service',
+                          return_value=self._two_calendar_service()):
+            lines = gc.fetch_events(days=3)
+        self.assertEqual(len(lines), 3)                       # dinner deduped
+        girls = next(l for l in lines if 'Girls night' in l)
+        self.assertIn('[shared only]', girls)                 # attribution preserved
+        self.assertNotIn('[shared only]', next(l for l in lines if 'Dinner' in l))
+        self.assertLess(lines.index(next(l for l in lines if 'Dentist' in l)),
+                        lines.index(girls))                   # chronological across cals
+
+    def test_scoped_shared_fetch_only_hits_shared_calendar(self):
+        gc._save_config({'shared_calendar_id': 'gf123'})
+        service = self._two_calendar_service()
+        with patch.object(gc, 'get_calendar_service', return_value=service):
+            lines = gc.fetch_events(days=3, calendar='shared')
+        called_ids = [c.kwargs.get('calendarId')
+                      for c in service.events.return_value.list.call_args_list]
+        self.assertEqual(called_ids, ['gf123'])               # personal never queried
+        self.assertEqual(len(lines), 2)                       # dinner + girls night, no tag
+        self.assertFalse(any('[shared only]' in l for l in lines))
+
+    def test_scoped_shared_without_config_is_empty(self):
+        with patch.object(gc, 'get_calendar_service', return_value=MagicMock()):
+            self.assertEqual(gc.fetch_events(days=3, calendar='shared'), [])
+
+    def test_tool_rejects_bad_scope(self):
+        self.assertIn("Error", gc.get_calendar_events.invoke(
+            {"days": 1, "calendar": "girlfriend"}))
+
 
 class TestConfig(TempConfigMixin, unittest.TestCase):
     def test_configure_tool_roundtrip(self):
