@@ -241,6 +241,10 @@ class SubscriptionBrain:
                         result["session_id"] = sid
                     result["is_error"] = getattr(msg, "is_error", False)
                     result["subtype"] = getattr(msg, "subtype", "") or ""
+                    # The CLI's actual words ("Claude AI usage limit reached…", "Invalid
+                    # API key", …). The SDK's structured error can be junk (empty errors +
+                    # subtype "success" on error results), so THIS is the diagnostic.
+                    result["result_text"] = str(getattr(msg, "result", "") or "")[:300]
                     self._record_usage(msg)
 
         # The SDK MERGES its env option over the parent environment (verified live:
@@ -252,7 +256,9 @@ class SubscriptionBrain:
         try:
             anyio.run(go)
         except Exception as e:
-            raise BrainUnavailable(str(e)[:200])
+            # Prefer the CLI's own result text (captured before it exited) — the SDK's
+            # replacement exception can be uninformative ("error result: success").
+            raise BrainUnavailable(result.get("result_text") or str(e)[:200])
         finally:
             if key is not None:
                 os.environ["ANTHROPIC_API_KEY"] = key
@@ -260,7 +266,8 @@ class SubscriptionBrain:
         # No usable reply (rate limit, auth, CLI failure) → let the caller serve this
         # turn from the API fallback instead of answering "(no response)".
         if not result["reply"]:
-            raise BrainUnavailable(result.get("subtype") or "no reply from subscription")
+            raise BrainUnavailable(result.get("result_text") or result.get("subtype")
+                                   or "no reply from subscription")
 
         reply = result["reply"]
         with _lock:
