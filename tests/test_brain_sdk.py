@@ -173,6 +173,35 @@ class TestRuntimeFallback(TempState):
         self.assertNotIsInstance(agent, SubscriptionBrain)
 
 
+class TestFailureClassification(unittest.TestCase):
+    def test_limit_phrasings(self):
+        for r in ("Claude AI usage limit reached|1789000000",
+                  "You've hit the rate limit", "limit will reset at 5pm",
+                  "out of extra usage"):
+            self.assertEqual(brain_sdk.classify_failure(r), "limit", r)
+
+    def test_auth_phrasings(self):
+        for r in ("Invalid API key · Please run /login",
+                  "OAuth token has expired", "authentication_error",
+                  "credential revoked", "You are logged out"):
+            self.assertEqual(brain_sdk.classify_failure(r), "auth", r)
+
+    def test_unknown_is_other(self):
+        self.assertEqual(brain_sdk.classify_failure("success"), "other")
+        self.assertEqual(brain_sdk.classify_failure(""), "other")
+
+    def test_alert_message_carries_the_right_advice(self):
+        sent = []
+        with patch("notify.send_telegram", side_effect=lambda t: sent.append(t) or True):
+            brain_sdk._fallback["alerted"] = None
+            brain_sdk._fallback_alert("OAuth token has expired · Please run /login")
+            brain_sdk._fallback["alerted"] = None
+            brain_sdk._fallback_alert("Claude AI usage limit reached|1789")
+        self.assertIn("/login", sent[0])                  # auth → tells him the fix
+        self.assertIn("resets", sent[1])                  # limit → tells him to wait
+        brain_sdk._fallback["alerted"] = None             # don't leak state to other tests
+
+
 class TestHistoryBridge(TempState):
     """The two one-way bridges: fallback turns see recent subscription context; the next
     subscription turn absorbs the fallback exchanges."""

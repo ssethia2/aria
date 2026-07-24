@@ -99,20 +99,44 @@ def _api_fallback_agent():
     return _fallback["agent"]
 
 
+def classify_failure(reason: str) -> str:
+    """'auth' | 'limit' | 'other' from the CLI's failure text — so the owner alert can say
+    what to actually DO (re-login vs wait) instead of a generic shrug."""
+    r = (reason or "").lower()
+    if any(s in r for s in ("usage limit", "rate limit", "limit reached", "limit will reset",
+                            "out of extra usage", "resets at")):
+        return "limit"
+    if any(s in r for s in ("login", "log in", "logged out", "authentication", "auth",
+                            "credential", "api key", "unauthorized", "oauth", "expired",
+                            "invalid_grant", "revoked", "please run /login")):
+        return "auth"
+    return "other"
+
+
 def _fallback_alert(reason: str):
     """Tell the owner (once/day) that turns are being served on API billing — hitting the
-    subscription limit should never silently turn back into a surprise API bill."""
+    subscription limit should never silently turn back into a surprise API bill. The
+    message names the likely cause and the fix (re-login vs wait it out)."""
     print(f"[brain] ⚠️ subscription turn failed ({reason}) — serving from the API fallback")
     from datetime import date
     today = date.today().isoformat()
     if _fallback["alerted"] == today:
         return
     _fallback["alerted"] = today
+    kind = classify_failure(reason)
+    if kind == "auth":
+        advice = ("Looks like the Claude Code login expired — run /login in Claude Code "
+                  "on the Mac and I'll switch back on your next message.")
+    elif kind == "limit":
+        advice = ("Looks like the subscription's rolling usage limit — nothing to do; "
+                  "I'll switch back automatically once it resets.")
+    else:
+        advice = "I'll retry the subscription on each new message."
     try:
         from notify import send_telegram
-        send_telegram("⚠️ Heads up: I've hit the subscription limit (or it errored), so "
-                      "I'm answering on API billing for now. I'll retry the subscription "
-                      f"on each new message. ({reason[:120]})")
+        send_telegram("⚠️ Heads up: I couldn't use the subscription just now, so I'm "
+                      f"answering on API billing for the moment. {advice}\n"
+                      f"(Reason: {reason[:150]})")
     except Exception:
         pass
 
