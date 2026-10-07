@@ -47,6 +47,7 @@ With the Gmail-API path set up (`auth_google.py` requests the calendar scopes to
 |---|---|
 | Semantic memory + LLM fallback | `GEMINI_API_KEY` ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) |
 | Smart home (Matter via Home Assistant) | `HA_URL`, `HA_TOKEN` |
+| Smart home on a Mac, no Home Assistant (Apple Shortcuts) | In the Shortcuts app, build Shortcuts named with the `Aria` prefix (e.g. `Aria Lights Off`) using the **Control Home** action; approve the one-time Home-access prompt on first run. Optional `ARIA_SHORTCUT_PREFIX`. Runs scenes only — no device-state reads. |
 | External dead-man's-switch | `HEARTBEAT_URL` (a [healthchecks.io](https://healthchecks.io) ping URL; period ~20m, grace ~10m) |
 | iMessage interface (macOS) | `IMESSAGE_ALLOWED_HANDLES` + Full Disk Access & Automation→Messages — see [imessage.md](imessage.md). Run only one engine-hosting interface at a time. |
 | Local voice REPL (`voice.py`) | `pip install sounddevice`; `ARIA_WHISPER_MODEL` = `base` (default) or `tiny` (slower CPUs / Pi) for STT size |

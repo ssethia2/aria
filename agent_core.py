@@ -39,6 +39,7 @@ from skills.grocery_manager import (add_to_grocery_list, view_grocery_list,
 from skills.package_manager import check_packages
 from skills.browser_manager import browse_and_report
 from skills.home_assistant import list_lights, control_light
+from skills.home_shortcuts import list_home_shortcuts, run_home_shortcut
 from skills.spotify_manager import (play_music, playback_control, now_playing,
                                     create_playlist)
 from healthcheck import run_all as _health_run_all, summary as _health_summary
@@ -143,6 +144,8 @@ def build_tools(guest=False):
         browse_and_report,
         list_lights,
         control_light,
+        list_home_shortcuts,
+        run_home_shortcut,
         play_music,
         playback_control,
         now_playing,
@@ -310,6 +313,10 @@ You have access to a semantic memory database and several active skills.
   dates/party size to browse_and_report in `facts` and put them in the task too.
 - SMART HOME: `control_light` (on/off, brightness, color) and `list_lights` operate his
   Matter lights via Home Assistant. "turn off the lights" → control_light("all", "off").
+  If `control_light` says smart home isn't connected, use the Apple Shortcuts bridge
+  instead: `run_home_shortcut` (partial names work: "lights off" → "Aria Lights Off") and
+  `list_home_shortcuts` to see what exists. It runs scenes only — it cannot read device
+  state, so never claim a light "is on/off" from it; report only that the shortcut ran.
 - MUSIC: `play_music` (search + play), `playback_control` (pause/resume/next/previous),
   `now_playing`, and `create_playlist` (for "make me a playlist for X", pick the tracks
   yourself and pass them). Spotify; needs an active device for playback.
