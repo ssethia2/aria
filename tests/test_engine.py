@@ -12,6 +12,26 @@ from unittest.mock import MagicMock, patch
 import engine
 from engine import (Monitor, Notification, ProactiveEngine, CommitmentMonitor,
                     EmailDigestMonitor, ChaseMonitor, InsightMonitor, NetflixMonitor)
+import memory
+
+# Every delivered notification is mirrored into the working-memory scratchpad. Point it at a
+# throwaway file for this whole module so test pings never land in the real
+# daily_scratchpad.txt (they did: "ping", "fire!", "still alive" on every run).
+_REAL_SCRATCHPAD = memory.SCRATCHPAD_PATH
+_scratch_patch = None
+
+
+def setUpModule():
+    global _scratch_patch
+    fd, path = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    _scratch_patch = patch.object(memory, "SCRATCHPAD_PATH", path)
+    _scratch_patch.start()
+
+
+def tearDownModule():
+    os.unlink(memory.SCRATCHPAD_PATH)
+    _scratch_patch.stop()
 
 
 class StubMonitor(Monitor):
@@ -60,6 +80,13 @@ class TestQuietHours(unittest.TestCase):
 
 class TestActionMemory(TempStateMixin, unittest.TestCase):
     """Engine notifications must land in the working-memory scratchpad (no split brain)."""
+
+    def test_tests_never_write_the_real_scratchpad(self):
+        self.assertNotEqual(memory.SCRATCHPAD_PATH, _REAL_SCRATCHPAD)
+        eng = ProactiveEngine([StubMonitor([Notification("ping")])], notify_fn=lambda t: True)
+        eng.tick(now_monotonic=100, now=datetime(2026, 6, 10, 12, 0))
+        with open(memory.SCRATCHPAD_PATH) as f:
+            self.assertIn("ping", f.read())         # went to the module's throwaway file
 
     def test_notification_recorded_to_scratchpad(self):
         import memory
