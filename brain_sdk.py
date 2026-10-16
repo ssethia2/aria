@@ -98,11 +98,15 @@ _fallback = {"agent": None, "alerted": None}
 
 def _api_fallback_agent():
     """Lazily built LangGraph/API agent used when the subscription can't serve a turn
-    (force_api so this can never recurse back into the SDK brain)."""
+    (force_api so this can never recurse back into the SDK brain).
+
+    No checkpointer: each fallback turn starts fresh and gets its continuity from the
+    mirror bridge (_recent_context). A persistent checkpointer replayed the thread's whole
+    history every turn — four one-word fallback turns on 2026-08-31 sent 776K input tokens
+    ($2.22) and left a 464 MB aria_checkpoints.db."""
     if _fallback["agent"] is None:
-        from agent_core import build_agent, open_checkpointer
-        _fallback["agent"] = build_agent(checkpointer=open_checkpointer(),
-                                         guest=False, force_api=True)
+        from agent_core import build_agent
+        _fallback["agent"] = build_agent(checkpointer=None, guest=False, force_api=True)
     return _fallback["agent"]
 
 

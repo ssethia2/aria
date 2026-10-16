@@ -163,6 +163,33 @@ class TestRuntimeFallback(TempState):
                                    config={"configurable": {"thread_id": "fb2"}}))
         self.assertEqual(chunks[-1]["agent"]["messages"][0].content, "streamed reply")
 
+    def test_fallback_agent_does_not_replay_history(self):
+        # The fallback must not persist/replay the thread: continuity comes from the bridge.
+        brain_sdk._fallback["agent"] = None
+        try:
+            with patch("agent_core.build_agent", return_value=MagicMock()) as build:
+                brain_sdk._api_fallback_agent()
+            self.assertIsNone(build.call_args.kwargs["checkpointer"])
+            self.assertTrue(build.call_args.kwargs["force_api"])
+        finally:
+            brain_sdk._fallback["agent"] = None
+
+    def test_consecutive_fallback_turns_stay_continuous(self):
+        # Without a checkpointer, turn 2 must still see turn 1 via the mirror bridge.
+        b = _brain()
+        api = self._api("You have two replies open.")
+        cfg = {"configurable": {"thread_id": "fb3"}}
+        with patch.object(SubscriptionBrain, "_run_turn",
+                          side_effect=brain_sdk.BrainUnavailable("auth")), \
+             patch.object(brain_sdk, "_api_fallback_agent", return_value=api), \
+             patch.object(brain_sdk, "_fallback_alert"):
+            b.invoke({"messages": [HumanMessage(content="Which reply")]}, config=cfg)
+            b.invoke({"messages": [HumanMessage(content="The first one")]}, config=cfg)
+        second = api.invoke.call_args_list[1].args[0]["messages"][0].content
+        self.assertIn("Which reply", second)
+        self.assertIn("You have two replies open.", second)
+        self.assertTrue(second.endswith("The first one"))
+
     def test_error_result_raises_unavailable(self):
         # A ResultMessage with no assistant reply (e.g. usage-limit error) must raise,
         # not answer "(no response)".
