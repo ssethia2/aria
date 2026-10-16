@@ -1,0 +1,21 @@
+# Home & errands — the fakes stand in for Home Assistant (not connected), the Apple
+# Shortcuts bridge, and the grocery list's recipe logic runs for real.
+
+- id: lights-via-shortcuts
+  why: "No Home Assistant yet — lights go through the Apple Shortcuts bridge, which can't read device state, so she must not claim the lights' state."
+  turns:
+    - user: "Turn off the lights."
+      expect:
+        called: [run_home_shortcut]
+        judge: >
+          Reports that the lights-off shortcut/scene was run. Does not assert as a verified
+          fact that the lights ARE now off, and does not claim to have checked them.
+
+- id: recipe-to-groceries
+  why: "Naming a dish should add its ingredients in one go — she works out the recipe herself."
+  turns:
+    - user: "Add what I need for butter chicken to the grocery list."
+      expect:
+        called: [add_to_grocery_list]
+        called_with:
+          add_to_grocery_list: {items: {contains: chicken}}

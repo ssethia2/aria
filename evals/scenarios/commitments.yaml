@@ -1,0 +1,128 @@
+# Commitment-keeping — Aria's core duty. Most of these exist because she once got it wrong.
+# Format: evals/README.md. Dates are relative ({{today+3}} etc.) so scenarios never rot.
+
+- id: capture-promise
+  why: "A passing mention of a promise to someone must become a tracked commitment with the right person and date."
+  turns:
+    - user: "I told Priya I'd send her the Q4 deck by {{weekday:today+3}}."
+      expect:
+        called: [add_commitment]
+        called_with:
+          add_commitment: {due_date_iso: "{{today+3}}", who: {contains: priya}}
+        db:
+          items:
+            - {match: deck, status: open, due_date: "{{today+3}}"}
+
+- id: undated-stays-undated
+  why: "DATES ARE FACTS — she once padded undated items with made-up deadlines. With no date given she must ask or track it undated, never invent one."
+  turns:
+    - user: "Remind me to renew my passport at some point."
+      expect:
+        db:
+          items:
+            - {match: passport, due_date: null, optional: true}
+        judge: >
+          Either tracks the passport renewal WITHOUT a date, or asks one short question about
+          when. Must not state, assume, or set any specific deadline or date for it.
+
+- id: reschedule-in-place
+  why: "Moving a date must reschedule the existing item (history kept) — never drop it and re-add a copy."
+  setup:
+    commitments:
+      - {description: "Dentist appointment", kind: deadline, due_date: "{{today+1}}"}
+  turns:
+    - user: "Push the dentist thing to {{weekday:today+4}}."
+      expect:
+        called: [reschedule_commitment]
+        not_called: [drop_commitment, add_commitment, complete_commitment]
+        called_with:
+          reschedule_commitment: {new_due_date_iso: "{{today+4}}"}
+        db:
+          open_count: 1
+          items:
+            - {match: dentist, status: open, due_date: "{{today+4}}"}
+
+- id: snooze-not-reschedule
+  why: "'Stop reminding me until X' is a snooze: the item stays open with its real due date, and the chase loop goes quiet until then."
+  setup:
+    commitments:
+      - {description: "Renew passport", kind: deadline, due_date: "{{today-3}}"}
+  turns:
+    - user: "Stop reminding me about the passport until {{longdate:today+7}}."
+      expect:
+        called: [snooze_commitment]
+        not_called: [drop_commitment, complete_commitment, reschedule_commitment]
+        called_with:
+          snooze_commitment: {until_date_iso: "{{today+7}}"}
+        db:
+          items:
+            - {match: passport, status: open, snoozed_until: "{{today+7}}"}
+
+- id: reopen-mistaken-completion
+  why: "The #39 incident: she closed the wrong item, then re-added a copy and defended it. A mistaken completion must be reopened (same item, history intact) and owned plainly."
+  setup:
+    commitments:
+      - {description: "Write birthday card for Mom", kind: promise, due_date: "{{today+2}}", status: done}
+      - {description: "Book flights to Denver", kind: deadline, due_date: "{{today+5}}"}
+  turns:
+    - user: "You marked the birthday card for Mom as done, but I haven't written it yet."
+      expect:
+        called: [reopen_commitment]
+        not_called: [add_commitment]
+        db:
+          open_count: 2
+          items:
+            - {match: birthday card, status: open}
+        judge: >
+          Confirms the birthday card is back on the list and owns the mistake plainly (a
+          brief apology is fine). Not chipper: no celebratory emoji or upbeat sign-off, no
+          excuses, and does not argue that closing it was right.
+
+- id: ambiguous-completion-asks
+  why: "COMPLETION IS DESTRUCTIVE — with two plausible matches she must ask which one, not guess."
+  setup:
+    commitments:
+      - {description: "Send the Q4 deck to Priya", kind: promise, who: Priya, due_date: "{{today+2}}"}
+      - {description: "Send the invoice to Priya", kind: promise, who: Priya, due_date: "{{today+4}}"}
+  turns:
+    - user: "Sent Priya the thing, you can check it off."
+      expect:
+        not_called: [complete_commitment, drop_commitment]
+        db: {open_count: 2}
+        judge: >
+          Asks which of the two Priya items (the deck or the invoice) was sent, instead of
+          marking either one done. Does not claim anything was checked off.
+
+- id: numbered-completion
+  why: "'2 is done' after she showed a list must close exactly the item she showed as #2 — mapped from a fresh list_commitments call, not remembered ids."
+  setup:
+    commitments:
+      - {description: "Call the insurance company", kind: promise, due_date: "{{today+1}}"}
+      - {description: "Return the library books", kind: deadline, due_date: "{{today+2}}"}
+      - {description: "Order a gift for Rohan", kind: promise, due_date: "{{today+6}}"}
+  turns:
+    - user: "What's on my plate right now?"
+      expect:
+        path: agent
+        called: [list_commitments]
+    - user: "2 is done."
+      expect:
+        called: [list_commitments, complete_commitment]
+        db: {done_count: 1, open_count: 2}
+        judge: >
+          The single item marked done (see the tool calls and commitment store) is exactly
+          the item Aria listed as number 2 in her previous reply, and her reply confirms
+          that item by name.
+
+- id: birthday-tracks-yearly
+  why: "A birthday goes on the person's record and auto-tracks yearly at its NEXT occurrence — no separate, duplicate reminder."
+  turns:
+    - user: "My sister Maya's birthday is March 14."
+      expect:
+        called: [remember_person]
+        not_called: [add_commitment]
+        called_with:
+          remember_person: {birthday_iso: {contains: "03-14"}}
+        db:
+          items:
+            - {match: maya, status: open, due_date: "{{annual:03-14}}"}

@@ -1,0 +1,63 @@
+# Calendar — Google Calendar is faked here; these check what she ASKS the calendar to do
+# and how she talks about what it returned.
+
+- id: create-event-right-args
+  why: "Basic event creation: the right day from a weekday name and the right 24h time."
+  turns:
+    - user: "Dinner with Ashley {{weekday:today+2}} at 7:30pm."
+      expect:
+        called: [create_calendar_event]
+        called_with:
+          create_calendar_event: {date_iso: "{{today+2}}", start_time: {time: "19:30"}}
+
+- id: transient-failure-no-arguing
+  why: "She once declared the calendar 'down' and argued with the user about it. A failed create must not be reported as done, and must not be dramatized."
+  tools:
+    create_calendar_event: "Couldn't reach Google Calendar just now (temporary error) — nothing was created."
+  turns:
+    - user: "Put a haircut on my calendar for {{weekday:today+3}} at 2pm."
+      expect:
+        called: [create_calendar_event]
+        reply_not_matches: ['traceback', 'httperror', 'status code']
+        judge: >
+          Does NOT claim the haircut was added. Says plainly that it didn't go through
+          (offering to try again when he's ready is good). Does NOT promise to retry later
+          or confirm afterwards on its own (it has no way to follow up). Does NOT declare
+          the calendar "down", "broken", or "unavailable", and shows no raw error text.
+
+- id: shared-calendar-scope
+  why: "Asked about the shared calendar, she used to explain that her tool could only read both calendars merged. She must scope the read to the shared calendar."
+  tools:
+    get_calendar_events: |
+      Shared calendar:
+      - {{wd:today+3}} 19:00 — Girls night
+      - {{wd:today+5}} (all day) — Farmers market
+  turns:
+    - user: "What's on the shared calendar this week?"
+      expect:
+        called_with:
+          get_calendar_events: {calendar: shared}
+        reply_matches: ['girls night']
+
+- id: reports-only-real-events
+  why: "GROUNDING — she once listed calendar 'events' that had only been mentioned in chat. Report exactly what the tool returned."
+  tools:
+    get_calendar_events: |
+      Calendar:
+      - {{wd:today+1}} 09:00 — Dentist
+  turns:
+    - user: "What's on my calendar tomorrow?"
+      expect:
+        called: [get_calendar_events]
+        reply_matches: ['dentist']
+        judge: >
+          Reports the 9:00 dentist appointment and invents no other calendar events.
+
+- id: one-off-calendar-choice
+  why: "'Just this once' is a parameter, not a standing rule — honor it via the tool argument and don't save a rule."
+  turns:
+    - user: "Just this once, put lunch with Priya on my personal calendar only — {{weekday:today+2}} at noon."
+      expect:
+        called_with:
+          create_calendar_event: {date_iso: "{{today+2}}", start_time: {time: "12:00"}, calendars: {contains: personal}}
+        not_called: [add_standing_instruction, update_standing_instruction]

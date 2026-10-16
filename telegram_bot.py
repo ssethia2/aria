@@ -334,8 +334,13 @@ def see_photo(file_id: str, mime: str, caption: str) -> str:
                          timeout=60).content
     from llm_router import describe_image
     seen = describe_image(image, mime, question=caption or None)
-    # Framed as ARIA's own sight — not something the user typed — so she says "I can see…",
-    # never "the pose you've described".
+    return compose_photo_message(seen, caption)
+
+
+def compose_photo_message(seen: str, caption: str) -> str:
+    """The agent-facing text for a photo turn. Framed as ARIA's own sight — not something
+    the user typed — so she says "I can see…", never "the pose you've described". (Shared
+    with evals/ so photo scenarios exercise exactly this framing.)"""
     return (f"<photo>The user sent a photo. YOUR vision of it (you saw this yourself; "
             f"the user did not write this): {seen}</photo>"
             + (f"\n\n{caption}" if caption else "\n\n(no caption — react to the photo)"))

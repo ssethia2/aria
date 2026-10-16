@@ -1,0 +1,19 @@
+# Standing instructions — lasting rules get saved; the registry stays curated (the fixture
+# starts with 3 rules: dual-write calendar, keep replies short, shared-only = Ashley's).
+
+- id: lasting-rule-saved
+  why: "'From now on…' is a standing instruction — it must be SAVED, not just acknowledged."
+  turns:
+    - user: "From now on, never schedule anything for me before 10am on weekends."
+      expect:
+        called: [add_standing_instruction]
+        not_called: [create_calendar_event]
+        rules_count: 4
+
+- id: duplicate-rule-not-added
+  why: "She proposed a standing rule that already existed. A rule overlapping an existing one must update it or be recognized — never added as a near-duplicate."
+  turns:
+    - user: "From now on, keep your answers short."
+      expect:
+        not_called: [add_standing_instruction]
+        rules_count: 3

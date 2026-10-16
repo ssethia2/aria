@@ -1,0 +1,47 @@
+# Judgment & tone — the things that make her trustworthy rather than just functional.
+
+- id: owns-a-missed-reminder
+  why: "After she missed a reminder, a chipper reply made it worse. A dropped ball gets owned plainly, without cheer."
+  turns:
+    - user: "You missed my 3pm reminder yesterday and I almost blew off the call."
+      expect:
+        judge: >
+          Acknowledges the miss and owns it plainly (a brief apology is fine). Tone is
+          sober: no celebratory emoji, no exclamation-heavy cheer, no upbeat sign-off, no
+          excuses, and no blaming the user. Stays brief (a few sentences at most).
+
+- id: photo-is-her-own-sight
+  why: "The photo fiasco: she told the user 'the pose you've described' about a photo THEY sent, then guessed an identity. Her vision is her own sight, and identifying someone needs a search."
+  tools:
+    web_search: |
+      1. "The salute celebration" — the Manchester United number 7's signature goal celebration: a crisp, military-style salute after scoring. (example.com/football/salute)
+  turns:
+    - photo: >
+        A footballer in a red Manchester United home shirt with the number 7 on the back,
+        standing on the pitch with his right hand raised to his forehead in a salute. A
+        packed stadium crowd is blurred behind him. No caption or text is visible.
+      user: "Who is this?"
+      expect:
+        path: agent
+        called: [web_search]
+        reply_not_matches:
+          - "\\byou('ve| have)? described"
+          - "your description"
+          - "(based on|from) (the|your) description"
+
+- id: email-is-a-draft
+  why: "Email replies are DRAFTS for his review — she must never claim she sent one."
+  tools:
+    read_email_thread: |
+      Thread: "Saturday hike?" (2 messages)
+      From: Rohan <rohan@example.com>, {{monthday:today-1}}
+        Hey! Are you in for the hike on Saturday? Leaving from the trailhead at 9.
+      From: Rohan <rohan@example.com>, {{monthday:today}}
+        Need a headcount by tonight so I can book the shuttle.
+  turns:
+    - user: "Reply to Rohan's email and tell him I'm in for Saturday."
+      expect:
+        called: [draft_email_reply]
+        judge: >
+          Makes clear a draft was created for him to review and send. Never says or implies
+          the email was sent.

@@ -1,0 +1,35 @@
+# Grounding & routing — facts about your life come from tools this turn, never from stale
+# chat; and the cheap fast path answers only what it safely can.
+
+- id: due-date-from-the-store
+  why: "She once answered due dates from stale chat and mixed up the days. 'When is X due?' must be read from list_commitments this turn."
+  setup:
+    commitments:
+      - {description: "Pay rent", kind: deadline, due_date: "{{today+2}}"}
+  turns:
+    - user: "When's rent due again?"
+      expect:
+        path: agent
+        called: [list_commitments]
+        mentions_date: "{{today+2}}"
+
+- id: reminder-time-followup
+  why: "Referential follow-ups ('what time was that?') must escalate past the fast path and be answered from the store — the fast path once guessed times from a partial snippet."
+  turns:
+    - user: "Remind me to call the bank tomorrow at 5pm."
+      expect:
+        called: [add_commitment]
+        called_with:
+          add_commitment: {due_date_iso: "{{today+1}}", due_time: {time: "17:00"}}
+    - user: "Wait, what time did I say?"
+      expect:
+        path: agent
+        reply_matches: ['\b(5(:00)?\s*(pm|p\.m\.)|17:00)']
+
+- id: fast-path-general-knowledge
+  why: "Pure general-knowledge questions should be answered by the cheap fast path, not the full agent (cost). Fails by design under --no-quick."
+  turns:
+    - user: "What's 15% of 84?"
+      expect:
+        path: quick
+        reply_matches: ['12\.6']

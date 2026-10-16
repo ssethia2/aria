@@ -116,5 +116,6 @@ launchd/                 macOS resident-service agents
 pi/                      Raspberry Pi systemd units + setup
 docs/                    Architecture, setup, ADRs, Pi migration
 tests/                   Offline unit suite
+evals/                   Behavioral eval suite: real agent, sandboxed tools/stores (python3 -m evals)
 context/                 Implementation plan + task log
 ```

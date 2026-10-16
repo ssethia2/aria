@@ -68,6 +68,7 @@ profile.json
 
 cost_log.json
 brain_sdk_state.json
+evals/results/
 
 # webvoice trial: friend invite tokens
 webvoice/friends.json
