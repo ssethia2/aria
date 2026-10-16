@@ -52,8 +52,15 @@ def _save_state(state: dict):
 
 
 def _clean_env() -> dict:
-    """Subprocess env WITHOUT the API key — its presence flips billing to the API."""
-    return {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    """Subprocess env WITHOUT the API key — its presence flips billing to the API.
+
+    Also loads Aria's tools UP FRONT (ENABLE_TOOL_SEARCH=false). With ~50 MCP tools Claude
+    Code defers them behind a ToolSearch round-trip, and evals caught the deferred mode
+    announcing actions it never took ("Done — moved to Monday" with no reschedule call:
+    3 of 7 trials) — 0 of 5 with tools loaded eagerly, plus one less round-trip per turn."""
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    env["ENABLE_TOOL_SEARCH"] = "false"
+    return env
 
 
 class BrainUnavailable(Exception):

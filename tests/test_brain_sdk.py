@@ -100,6 +100,13 @@ class TestBridging(unittest.TestCase):
             env = brain_sdk._clean_env()
         self.assertNotIn("ANTHROPIC_API_KEY", env)
 
+    def test_env_loads_tools_eagerly(self):
+        # Deferred tool loading (ToolSearch) made the brain announce actions it never took
+        # (evals: reschedule-in-place). Tools must be loaded up front.
+        with patch.dict(os.environ, {"ENABLE_TOOL_SEARCH": "true"}):
+            env = brain_sdk._clean_env()
+        self.assertEqual(env["ENABLE_TOOL_SEARCH"], "false")
+
     def test_run_turn_pops_key_from_process_env_and_restores(self):
         # The SDK MERGES env over the parent process env, so the key must be gone from
         # os.environ itself during the call — and back afterwards (even when the turn
