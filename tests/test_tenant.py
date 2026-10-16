@@ -52,7 +52,7 @@ class TestGuestToolset(unittest.TestCase):
         for forbidden in ("read_email_thread", "read_and_summarize_emails", "draft_email_reply",
                           "get_calendar_events", "create_calendar_event", "list_people",
                           "play_music", "control_light", "check_packages", "get_system_status",
-                          "browse_and_report", "analyze_commitments", "create_note", "read_cold_storage"):
+                          "browse_and_report", "analyze_commitments", "create_note"):
             self.assertNotIn(forbidden, names)   # owner accounts / shared data
 
     def test_owner_toolset_is_full(self):

@@ -49,7 +49,6 @@ _HA_NOT_CONNECTED = ("Smart home isn't connected yet — set HA_URL and HA_TOKEN
 DEFAULT_FAKES = {
     "add_memory": "Saved to memory.",
     "search_memory": "No relevant memories found.",
-    "read_cold_storage": "No such file in cold storage.",
     "update_memory": "Profile updated: {key} = {value}",
     "read_and_summarize_emails": "Processed 3 emails. Summary generated.",
     "read_email_thread": "No matching email thread found for '{search_query}'.",

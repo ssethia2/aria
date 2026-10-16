@@ -3,11 +3,10 @@
 LLM-extracts semantic facts from daily_scratchpad.txt, embeds them into ChromaDB,
 wipes the scratchpad, then checks the Tier 3 consolidation threshold. See docs/adr/0002.
 """
+import datetime
 import os
-import uuid
-from memory import SCRATCHPAD_PATH, collection, embeddings
+from memory import SCRATCHPAD_PATH, fact_lines, store_facts
 from llm_router import get_llm
-from dynamic_consolidation import consolidate_long_term_memory
 from langchain_core.messages import HumanMessage, SystemMessage
 
 def compact_scratchpad():
@@ -64,36 +63,23 @@ Raw Notes:
         if content.strip().upper() == "NOTHING":
             facts = []
         else:
-            facts = [line.strip("- *0123456789. ") for line in content.split('\n') if line.strip()]
+            facts = fact_lines(content)
 
         raw_lines = len([l for l in raw_text.split('\n') if l.strip()])
         print(f"Compaction filter: {len(facts)} durable fact(s) kept from {raw_lines} scratchpad line(s).")
 
-        if collection is None:
-            print("ChromaDB collection is uninitialized. Cannot compact.")
-            return
-
-        for fact in facts:
-            if not fact:
-                continue
-            vector = embeddings.embed_query(fact)
-            doc_id = str(uuid.uuid4())
-            collection.add(
-                embeddings=[vector],
-                documents=[fact],
-                ids=[doc_id]
-            )
-            print(f"✓ Added to Short-Term Memory: {fact}")
+        # Date facts by the scratchpad's last write — when they were told, not when the
+        # morning job happens to run.
+        noted = datetime.date.fromtimestamp(os.path.getmtime(SCRATCHPAD_PATH)).isoformat()
+        stored = store_facts(facts, added=noted)   # raises if ChromaDB is down -> keep scratchpad
+        print(f"{stored} new fact(s) stored in semantic memory.")
 
         # Clear scratchpad
         with open(SCRATCHPAD_PATH, "w") as f:
             f.write("")
-            
+
         print("Nightly compaction complete. Scratchpad wiped.")
-        
-        # Trigger Tier-3 Dynamic Consolidation Check
-        consolidate_long_term_memory(threshold=100)
-        
+
     except Exception as e:
         print(f"Failed during compaction: {e}")
 

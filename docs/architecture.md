@@ -13,7 +13,7 @@ Several thin **interfaces** share one agent; the agent calls **skills**; a backg
 | Agent | `agent_core.py` | One definition of tools + system prompt, shared by all interfaces |
 | Skills | `skills/` | Modular capabilities, each exposing LangChain tools |
 | Engine | `engine.py` | Polling monitors that act without being asked |
-| Memory | `memory.py`, `people.py`, compaction scripts | 3-tier memory + people model |
+| Memory | `memory.py`, `people.py`, `nightly_compaction.py` | scratchpad + dated semantic memory + people model |
 | Model access | `llm_router.py` | Tiered, fallback-aware model factory |
 
 New interfaces and skills build on `agent_core.py`; new monitors subclass `Monitor` in `engine.py`. Tools and the system prompt are defined once, in `agent_core.py`, never duplicated.
@@ -28,15 +28,14 @@ New interfaces and skills build on `agent_core.py`; new monitors subclass `Monit
 
 The chat agent's large, stable system+tools prefix is **prompt-cached** (the live timestamp is isolated in an uncached block so it can't bust the cache), cutting input cost dramatically on multi-turn chats. When a chain link starts failing, the user is alerted on Telegram once per model per day (except the light tier, whose free-primary is *expected* to fall through daily). See [ADR 0001](adr/0001-claude-gemini-fallback.md).
 
-## Memory (`memory.py` + `nightly_compaction.py` + `dynamic_consolidation.py`)
+## Memory (`memory.py` + `nightly_compaction.py`)
 
-A three-tier hierarchy — see [ADR 0002](adr/0002-3tier-memory.md):
+Two tiers over a static profile — see [ADR 0002](adr/0002-3tier-memory.md) and [ADR 0008](adr/0008-retire-cold-storage-tier.md), which retired the original cold-storage tier:
 
 1. **Tier 1 — working memory.** `add_memory` appends raw facts to `daily_scratchpad.txt` instantly (no embedding on the hot path).
-2. **Tier 2 — semantic memory.** `nightly_compaction.py` LLM-distills the scratchpad into durable facts, embeds them into ChromaDB (`chroma_db/`), wipes the scratchpad. The distillation **filters**: facts about the user are kept; operational log lines (engine actions, fired reminders) are discarded.
-3. **Tier 3 — cold storage.** When ChromaDB crosses a size threshold, `dynamic_consolidation.py` summarizes granular vectors into a long-form narrative in `cold_storage/`, deletes the originals, and leaves one "pointer" vector. `read_cold_storage` loads it on demand.
+2. **Tier 2 — semantic memory.** `nightly_compaction.py` LLM-distills the scratchpad into durable facts and stores them in ChromaDB (`chroma_db/`) via `memory.store_facts()`, each dated by when it was noted, then wipes the scratchpad. The distillation **filters**: facts about the user are kept; operational log lines (engine actions, fired reminders) are discarded. The store is uncapped — nothing is summarized away.
 
-`search_memory` reads Tier 1 + Tier 2 together. `profile.json` is static identity.
+`search_memory` reads Tier 1 plus the top 5 Tier-2 matches, each shown with its date so the newer of two conflicting facts wins. `profile.json` is static identity.
 
 ### People model (`people.py`)
 People are first-class records (name, relation, aliases, birthday, notes), not loose facts. `remember_person` / `get_person` / `list_people` are agent tools; saving a birthday auto-creates a yearly `people_date` commitment. Stored in `people.json`.
@@ -96,7 +95,7 @@ email_backend.py         IMAP/SMTP backend (no-Google-Cloud email path)
 email_filter.py          Deterministic bulk-mail pre-filter
 report_generator.py      Daily briefing Markdown
 nightly_compaction.py    Tier 1 → Tier 2 memory compaction
-dynamic_consolidation.py Tier 2 → Tier 3 cold-storage consolidation
+import_cold_storage.py   One-time import of retired cold-storage archives (ADR 0008)
 setup.sh / setup_wizard.py   Self-host setup + guided .env
 auth_google.py / auth_netflix.py   OAuth bootstrap
 skills/

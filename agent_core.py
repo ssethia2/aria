@@ -26,7 +26,7 @@ from langchain.agents.middleware import dynamic_prompt, ModelRequest
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from llm_router import get_llm
-from memory import add_memory, search_memory, read_cold_storage, load_profile
+from memory import add_memory, search_memory, load_profile
 from tenant import is_guest, get_current_name
 from skills.email_manager import (run_email_summary, draft_email_reply, update_memory,
                                   read_email_thread)
@@ -102,7 +102,6 @@ def build_tools(guest=False):
     return [
         add_memory,
         search_memory,
-        read_cold_storage,
         read_and_summarize_emails,
         read_email_thread,
         generate_morning_news,

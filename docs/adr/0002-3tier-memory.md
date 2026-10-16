@@ -1,6 +1,6 @@
 # ADR 0002 — 3-tier OS-style memory architecture
 
-**Status:** Accepted (2026-03)
+**Status:** Accepted (2026-03). Tier 3 superseded by [ADR 0008](0008-retire-cold-storage-tier.md) (2026-10).
 
 ## Context
 Aria started with a static `profile.json`. To feel intelligent she needs to *learn continuously* from conversation, but the obvious approach — embed every fact into a vector DB the moment it's mentioned — adds embedding-model latency to every chat turn, and an unbounded vector store eventually dilutes retrieval quality and grows costly.

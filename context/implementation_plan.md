@@ -40,7 +40,7 @@ To optimize for both lightning-fast conversational response times and deep, long
    - It then generates embeddings for those facts and inserts them into our active ChromaDB vector database. The scratchpad is then wiped clean for the next day. 
    - This database acts as her standard semantic context window for the following days.
 
-3. **Tier 3: Long-Term Cold Storage (`dynamic_consolidation.py`)**
+3. **Tier 3: Long-Term Cold Storage (`dynamic_consolidation.py`)** — *retired 2026-10, see [ADR 0008](../docs/adr/0008-retire-cold-storage-tier.md)*
    - A background monitor tracks the size of the ChromaDB collection. Once it breaches a threshold (e.g., > 100 vectors) or hits a monthly trigger, it groups related granular vectors.
    - The LLM summarizes these granular facts into comprehensive, long-form narratives (e.g., "Complete Travel History").
    - These narratives are written to disk in a `cold_storage/` directory, and a single, highly compressed "pointer" vector is left in ChromaDB (e.g., "Deep memory: Travel -> read `cold_storage/travel.txt`").

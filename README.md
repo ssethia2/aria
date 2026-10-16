@@ -24,13 +24,13 @@ Because let's be real — aren't we done being disappointed by Siri? You can *ta
 ## ✨ What makes it interesting
 
 ### 🧠 A memory that's actually architected
-Aria doesn't dump everything into one vector store and hope. It uses a **three-tier, OS-inspired memory hierarchy** that trades off speed and depth the way a computer trades registers, RAM, and disk:
+Aria doesn't dump every message into a vector store and hope. New facts land instantly in working memory, and a nightly pass decides what deserves to be remembered:
 
 - **Tier 1 — Working memory.** New facts append to a plain-text scratchpad instantly, with zero embedding latency, so conversation stays fast.
 - **Tier 2 — Semantic memory.** Each night an LLM distills the scratchpad into clean, durable facts and embeds them into a vector store (ChromaDB) for associative recall — and it *filters*: durable facts about you are kept, operational noise ("sent a digest", "fired a reminder") is discarded so the store stays sharp.
-- **Tier 3 — Cold storage.** When semantic memory grows large, related facts are consolidated into long-form narratives on disk, leaving a single "pointer" vector behind — human-like deep recall that's instant to *find* and loaded on demand.
+- **Every memory is dated.** Recall shows when each fact was noted, so when two disagree ("prefers tea" vs. "switched to coffee") the newer one wins.
 
-The result is memory that gets *better* over time instead of bloating.
+An earlier design summarized old memories into archive files behind a single "pointer" vector. It looked elegant and quietly made months of memories unfindable, so it was retired ([ADR 0008](docs/adr/0008-retire-cold-storage-tier.md)): nothing is summarized away now.
 
 ### 👥 It models the people in your life
 People aren't strings — they're **first-class entities** with names, relationships, birthdays, and remembered details. Mention "my girlfriend" and Aria doesn't know who that is, it asks her name *once*, saves it, and never asks again. Tell it a birthday and it silently becomes a recurring yearly reminder. This is the difference between an assistant that *stores text about you* and one that *knows your world*.
@@ -74,8 +74,8 @@ A handful of thin interfaces — **Telegram** (text + voice notes), **iMessage**
                 │                                  (per-task, prompt-cached)
      ┌──────────┼───────────────────────────┐
      ▼          ▼                            ▼
-  skills/   3-tier memory + people     engine.py (background)
-  (email,   (scratchpad→Chroma→cold,   commitments · email digest ·
+  skills/   memory + people            engine.py (background)
+  (email,   (scratchpad→dated Chroma,  commitments · email digest ·
   calendar,  durable conversations      insight · health · heartbeat
   notes,     via SQLite checkpoints)    · …
   browser…)

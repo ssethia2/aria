@@ -714,11 +714,10 @@ Return ONLY JSON (no markdown):
             print(f"[weekly] commitments gather failed: {e}")
         try:
             import memory
-            cs = os.path.join(os.path.dirname(memory.__file__), "cold_storage")
-            files = sorted(f for f in os.listdir(cs)) if os.path.isdir(cs) else []
-            if files:
-                with open(os.path.join(cs, files[-1])) as fh:
-                    parts.append("RECENT LONG-TERM MEMORY:\n" + fh.read()[-2000:])
+            facts = memory.recent_facts(days=7, today=self.now_fn().date())
+            if facts:
+                parts.append("THIS WEEK'S NEW MEMORIES:\n"
+                             + "\n".join(f"- {f}" for f in facts)[-2000:])
         except Exception as e:
             print(f"[weekly] memory gather failed: {e}")
         return "\n\n".join(parts)

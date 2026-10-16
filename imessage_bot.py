@@ -60,7 +60,7 @@ _ACTIONS = [
     (('list_lights', 'control_light', 'list_home_shortcuts', 'run_home_shortcut'),
      '💡 Adjusting the lights…'),
     (('remember_person', 'get_person', 'list_people', 'add_memory', 'search_memory',
-      'read_cold_storage', 'update_memory'), '🧠 Checking what I know…'),
+      'update_memory'), '🧠 Checking what I know…'),
     (('get_system_status',), '🩺 Running a self-check…'),
     (('add_standing_instruction', 'update_standing_instruction',
       'remove_standing_instruction'), '📌 Saving that as a standing rule…'),

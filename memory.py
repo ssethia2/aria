@@ -1,12 +1,14 @@
-"""Memory layer + LangChain memory tools (see docs/adr/0002 for the 3-tier design).
+"""Memory layer + LangChain memory tools (see docs/adr/0002, and 0008 which retired Tier 3).
 
 Tier 0: static profile.json. Tier 1: daily_scratchpad.txt (add_memory).
-Tier 2: ChromaDB semantic store (search_memory). Tier 3: cold_storage/ narratives
-(read_cold_storage). The nightly/threshold jobs that move data between tiers live in
-nightly_compaction.py and dynamic_consolidation.py.
+Tier 2: ChromaDB semantic store (search_memory) — every durable fact, dated, uncapped.
+nightly_compaction.py moves Tier 1 into Tier 2 via store_facts().
 """
+import datetime
 import json
 import os
+import re
+import time
 import uuid
 import chromadb
 from langchain_core.tools import tool
@@ -109,7 +111,78 @@ def add_memory(fact: str, config: RunnableConfig = None) -> str:
         if tok:
             reset_current_user(tok)
 
-def _search_memory(query: str, n_results: int = 3) -> str:
+def fact_lines(text: str) -> list:
+    """An LLM's one-fact-per-line output as a list: leading bullets/numbering and headings
+    removed, nothing trimmed from the END (facts often end in a date or number)."""
+    facts = []
+    for line in (text or "").splitlines():
+        line = re.sub(r"^\s*(?:[-*•]+|\d+[.)])\s*", "", line).strip()
+        if line and not line.startswith("#"):
+            facts.append(line)
+    return facts
+
+
+def _norm(text: str) -> str:
+    return " ".join((text or "").lower().split())
+
+
+_EMBED_BATCH = 50
+
+
+def _embed_all(texts: list) -> list:
+    """Embed in batches, waiting out the Gemini free tier's per-minute quota when it bites."""
+    vectors = []
+    for i in range(0, len(texts), _EMBED_BATCH):
+        chunk = texts[i:i + _EMBED_BATCH]
+        for attempt in range(4):
+            try:
+                # RETRIEVAL_QUERY: how every stored vector has always been made (embed_query).
+                vectors += embeddings.embed_documents(chunk, task_type="RETRIEVAL_QUERY")
+                break
+            except Exception as e:
+                if attempt == 3 or "RESOURCE_EXHAUSTED" not in str(e):
+                    raise
+                print("Embedding quota hit — waiting a minute…")
+                time.sleep(61)
+    return vectors
+
+
+def store_facts(facts, added: str, source: str = "compaction") -> int:
+    """Embed owner facts into ChromaDB, each tagged with the date it was learned (`added`,
+    YYYY-MM-DD) so search results show their age. Exact duplicates of a stored fact are
+    skipped. All or nothing: everything is embedded before anything is written. Returns how
+    many were stored; raises if ChromaDB is unavailable."""
+    if collection is None or embeddings is None:
+        raise RuntimeError("ChromaDB is unavailable")
+    existing = {_norm(d) for d in collection.get(include=["documents"])["documents"]}
+    new = []
+    for fact in facts:
+        fact = (fact or "").strip()
+        if fact and _norm(fact) not in existing:
+            existing.add(_norm(fact))
+            new.append(fact)
+    if not new:
+        return 0
+    vectors = _embed_all(new)
+    collection.add(ids=[uuid.uuid4().hex for _ in new], documents=new, embeddings=vectors,
+                   metadatas=[{"added": added, "source": source} for _ in new])
+    for fact in new:
+        print(f"✓ Added to semantic memory: {fact}")
+    return len(new)
+
+
+def recent_facts(days: int = 7, today=None) -> list:
+    """Owner facts learned in the last `days` days, oldest first."""
+    if collection is None:
+        return []
+    cutoff = ((today or datetime.date.today()) - datetime.timedelta(days=days)).isoformat()
+    got = collection.get(include=["documents", "metadatas"])
+    rows = [((meta or {}).get("added", ""), doc)
+            for doc, meta in zip(got["documents"], got["metadatas"])]
+    return [doc for added, doc in sorted(rows) if added >= cutoff]
+
+
+def _search_memory(query: str, n_results: int = 5) -> str:
     if is_guest():
         # Query ONLY this guest's collection — never the owner's scratchpad/collection.
         col = _guest_collection()
@@ -147,8 +220,10 @@ def _search_memory(query: str, n_results: int = 3) -> str:
             
             if results['documents'] and results['documents'][0]:
                 output.append("Semantic Memory (Past):")
-                for doc in results['documents'][0]:
-                    output.append(f"- {doc}")
+                metas = (results.get('metadatas') or [[]])[0] or []
+                for i, doc in enumerate(results['documents'][0]):
+                    added = (metas[i] or {}).get("added") if i < len(metas) else None
+                    output.append(f"- {doc}" + (f" (noted {added})" if added else ""))
         except Exception as e:
             output.append(f"[ChromaDB Error: {str(e)}]")
             
@@ -159,9 +234,10 @@ def _search_memory(query: str, n_results: int = 3) -> str:
 
 
 @tool
-def search_memory(query: str, n_results: int = 3, config: RunnableConfig = None) -> str:
+def search_memory(query: str, n_results: int = 5, config: RunnableConfig = None) -> str:
     """Use this tool to search the user's semantic memory for relevant facts or past events.
     Provide a search query (e.g., 'Does Satvik like coffee?', 'travel plans').
+    Memories show when they were noted; when two conflict, trust the newer one.
     """
     tok, refusal = _tenant_scope(config)
     if refusal:
@@ -171,21 +247,4 @@ def search_memory(query: str, n_results: int = 3, config: RunnableConfig = None)
     finally:
         if tok:
             reset_current_user(tok)
-
-@tool
-def read_cold_storage(filename: str) -> str:
-    """Use this tool to read a long-term memory archive file from cold storage when directed to by a pointer vector.
-    Provide the exact filename (e.g., 'memory_archive_20260317_120000.txt').
-    """
-    cold_storage_dir = os.path.join(os.path.dirname(__file__), "cold_storage")
-    filepath = os.path.join(cold_storage_dir, filename)
-    
-    if not os.path.exists(filepath):
-        return f"Error: Cold storage file '{filename}' not found."
-        
-    try:
-        with open(filepath, "r") as f:
-            return f"--- DEEP LONG-TERM MEMORY ARCHIVE ---\n{f.read()}\n-------------------------------------"
-    except Exception as e:
-        return f"Failed to read cold storage: {str(e)}"
 
