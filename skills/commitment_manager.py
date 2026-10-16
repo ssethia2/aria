@@ -236,6 +236,40 @@ def reopen(commitment_id):
     return row[0]
 
 
+def recently_closed(limit=20):
+    """Done/dropped commitments, most recently closed first — how a mistaken completion is
+    found again (closed items never appear in list_commitments). Closing time comes from
+    the event log, falling back to completed_at / created_at for pre-log items."""
+    pred, sp = _scope()
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT c.id, c.description, c.status, "
+        "COALESCE((SELECT MAX(e.at) FROM commitment_events e WHERE e.commitment_id = c.id "
+        "          AND e.event IN ('completed', 'dropped')), c.completed_at, c.created_at) "
+        "  AS closed_at "
+        f"FROM commitments c WHERE c.status IN ('done', 'dropped') AND {pred} "
+        "ORDER BY closed_at DESC, c.id DESC LIMIT ?", [*sp, limit]).fetchall()
+    conn.close()
+    return [{"id": r[0], "description": r[1], "status": r[2], "closed_at": r[3]}
+            for r in rows]
+
+
+_REOPEN_STOPWORDS = {"the", "for", "and", "you", "was", "that", "this", "with", "from",
+                     "marked", "done", "not", "yet", "but", "have", "haven"}
+
+
+def _match_closed(query, closed):
+    """Closed items best matching a description query: the ones sharing the most
+    significant words with it (empty if nothing overlaps)."""
+    words = {w for w in re.findall(r"[a-z0-9]+", (query or "").lower())
+             if len(w) > 2 and w not in _REOPEN_STOPWORDS}
+    if not words:
+        return []
+    scored = [(sum(w in c["description"].lower() for w in words), c) for c in closed]
+    best = max((s for s, _ in scored), default=0)
+    return [c for s, c in scored if best and s == best]
+
+
 def get_open_commitments():
     """All open commitments, dated ones first (soonest due), undated last."""
     pred, sp = _scope()
@@ -662,16 +696,45 @@ def snooze_commitment(commitment_id: int, until_date_iso: str,
 
 
 @tool
-def reopen_commitment(commitment_id: int, config: RunnableConfig = None) -> str:
+def reopen_commitment(commitment_id: int = None, description_query: str = None,
+                      config: RunnableConfig = None) -> str:
     """Reopen a commitment that was completed or dropped by mistake. THE fix for a wrong
-    completion — restores the same item with its history intact (never re-add a copy)."""
+    completion — restores the same item with its history intact (never re-add a copy).
+    Closed items do NOT appear in list_commitments, so if you don't know the id, pass
+    description_query (a few words from the item, e.g. "birthday card") and this finds it
+    among recently completed/dropped items itself.
+
+    Args:
+        commitment_id: The item's id, if you know it.
+        description_query: Words from the item's description, to find it when the id
+            isn't known (or to double-check one).
+    """
     tok, refusal = scope_from_config(config)
     if refusal:
         return refusal
     try:
-        desc = reopen(commitment_id)
-        return (f"Reopened #{commitment_id}: '{desc}' — back on the list."
-                if desc else f"#{commitment_id} isn't a completed/dropped commitment I can reopen.")
+        if commitment_id is not None:
+            desc = reopen(commitment_id)
+            if desc:
+                return f"Reopened #{commitment_id}: '{desc}' — back on the list."
+        closed = recently_closed()
+        if not closed:
+            return "There are no completed or dropped commitments to reopen."
+        listing = "\n".join(f"#{c['id']} {c['description']} ({c['status']})"
+                            for c in closed[:8])
+        if description_query:
+            hits = _match_closed(description_query, closed)
+            if len(hits) == 1:
+                desc = reopen(hits[0]["id"])
+                if desc:
+                    return f"Reopened #{hits[0]['id']}: '{desc}' — back on the list."
+            elif len(hits) > 1:
+                return ("Several closed items match — which one should I reopen?\n"
+                        + "\n".join(f"#{c['id']} {c['description']} ({c['status']})"
+                                    for c in hits))
+        lead = (f"#{commitment_id} isn't a completed/dropped commitment. "
+                if commitment_id is not None else "No closed item matched that. ")
+        return lead + "Recently closed:\n" + listing
     finally:
         if tok:
             reset_current_user(tok)

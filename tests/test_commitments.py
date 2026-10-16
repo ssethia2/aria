@@ -243,5 +243,53 @@ class TestV2EventsAndTools(TempDBMixin, unittest.TestCase):
             {"commitment_id": 1, "until_date_iso": "08/05"}))
 
 
+class TestReopenFindsClosedItems(TempDBMixin, unittest.TestCase):
+    """Closed items never appear in list_commitments, so reopen must be able to find them
+    (evals: the agent guessed an OPEN item's id, or asked the user for an id)."""
+
+    def setUp(self):
+        super().setUp()
+        self.card = cm.add("Write birthday card for Mom", due_date="2026-10-17")
+        self.flights = cm.add("Book flights to Denver", due_date="2026-10-20")
+        cm.complete(self.card)
+
+    def test_reopen_by_description_query(self):
+        out = cm.reopen_commitment.invoke({"description_query": "the birthday card for Mom"})
+        self.assertIn(f"Reopened #{self.card}", out)
+        self.assertEqual({c["id"] for c in cm.get_open_commitments()},
+                         {self.card, self.flights})
+
+    def test_wrong_id_lists_recently_closed_instead_of_dead_end(self):
+        out = cm.reopen_commitment.invoke({"commitment_id": self.flights})   # open item
+        self.assertIn(f"#{self.flights} isn't a completed/dropped", out)
+        self.assertIn(f"#{self.card} Write birthday card for Mom (done)", out)
+        self.assertEqual(len(cm.get_open_commitments()), 1)                  # nothing changed
+
+    def test_wrong_id_plus_query_self_corrects(self):
+        out = cm.reopen_commitment.invoke({"commitment_id": self.flights,
+                                           "description_query": "birthday card"})
+        self.assertIn(f"Reopened #{self.card}", out)
+
+    def test_ambiguous_query_asks_which(self):
+        gift = cm.add("Buy birthday gift for Rohan")
+        cm.drop(gift)
+        out = cm.reopen_commitment.invoke({"description_query": "birthday"})
+        self.assertIn("which one", out)
+        self.assertEqual(len(cm.get_open_commitments()), 1)                  # nothing reopened
+
+    def test_no_match_lists_closed(self):
+        out = cm.reopen_commitment.invoke({"description_query": "dentist"})
+        self.assertIn("No closed item matched", out)
+        self.assertIn("Write birthday card for Mom", out)
+
+    def test_recently_closed_newest_first_and_includes_dropped(self):
+        later = cm.add("Renew passport")
+        cm.drop(later)
+        ids = [c["id"] for c in cm.recently_closed()]
+        self.assertEqual(ids[0], later)
+        self.assertIn(self.card, ids)
+        self.assertNotIn(self.flights, ids)
+
+
 if __name__ == '__main__':
     unittest.main()
