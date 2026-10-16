@@ -265,6 +265,26 @@ class TestSandbox(unittest.TestCase):
                           brain_sdk.STATE_PATH), orig)
 
 
+class TestRegressionHistory(unittest.TestCase):
+    def test_each_scenario_compares_to_its_own_latest_result(self):
+        import json, tempfile
+        d = tempfile.mkdtemp()
+        runs = {"20261015-100000.json": {"brain": "subscription", "scenarios": {
+                    "a": {"passed": 0, "trials": 1}, "b": {"passed": 1, "trials": 1}}},
+                "20261015-110000.json": {"brain": "api", "scenarios": {      # other brain
+                    "b": {"passed": 0, "trials": 1}}},
+                "20261015-120000.json": {"brain": "subscription", "scenarios": {
+                    "a": {"passed": 1, "trials": 1}}}}            # targeted --only run
+        for fn, body in runs.items():
+            with open(os.path.join(d, fn), "w") as f:
+                json.dump(body, f)
+        with patch.object(H, "RESULTS_DIR", d):
+            prev = H._previous_results("subscription", {"a", "b", "c"})
+        self.assertEqual(prev["a"]["passed"], 1)     # newest run that covered a
+        self.assertEqual(prev["b"]["passed"], 1)     # older run still counts for b
+        self.assertNotIn("c", prev)                  # never run
+
+
 class _ScriptedAgent:
     """Stands in for the LLM: each invoke runs the next scripted tool calls through the
     sandbox's (proxied) tools and replies — so harness plumbing is tested offline."""

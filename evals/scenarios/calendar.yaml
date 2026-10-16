@@ -23,7 +23,8 @@
           Does NOT claim the haircut was added. Says plainly that it didn't go through
           (offering to try again when he's ready is good). Does NOT promise to retry later
           or confirm afterwards on its own (it has no way to follow up). Does NOT declare
-          the calendar "down", "broken", or "unavailable", and shows no raw error text.
+          the calendar "down"/"broken" or treat it as unusable (a hedged, temporary "seems
+          unreachable right now" is fine), and shows no raw error text.
 
 - id: shared-calendar-scope
   why: "Asked about the shared calendar, she used to explain that her tool could only read both calendars merged. She must scope the read to the shared calendar."

@@ -107,7 +107,7 @@
         called: [list_commitments]
     - user: "2 is done."
       expect:
-        called: [list_commitments, complete_commitment]
+        called: [complete_commitment]     # outcome-checked below; re-listing first is optional
         db: {done_count: 1, open_count: 2}
         judge: >
           The single item marked done (see the tool calls and commitment store) is exactly
@@ -119,6 +119,7 @@
   turns:
     - user: "My sister Maya's birthday is March 14."
       expect:
+        path: agent                        # the fast path once swallowed this — nothing saved
         called: [remember_person]
         not_called: [add_commitment]
         called_with:

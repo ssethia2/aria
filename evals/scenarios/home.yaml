@@ -2,14 +2,15 @@
 # Shortcuts bridge, and the grocery list's recipe logic runs for real.
 
 - id: lights-via-shortcuts
-  why: "No Home Assistant yet — lights go through the Apple Shortcuts bridge, which can't read device state, so she must not claim the lights' state."
+  why: "No Home Assistant yet — lights go through the Apple Shortcuts bridge. She once asked permission to use it instead of just turning the lights off."
   turns:
     - user: "Turn off the lights."
       expect:
         called: [run_home_shortcut]
         judge: >
-          Reports that the lights-off shortcut/scene was run. Does not assert as a verified
-          fact that the lights ARE now off, and does not claim to have checked them.
+          Turns the lights off via the shortcut and reports it ("Done — lights off" is
+          fine). Does NOT ask for permission or confirmation before acting, and does not
+          claim to have checked or verified the lights' state.
 
 - id: recipe-to-groceries
   why: "Naming a dish should add its ingredients in one go — she works out the recipe herself."

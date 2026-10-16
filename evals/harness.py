@@ -398,19 +398,26 @@ def _git_sha() -> str:
         return "?"
 
 
-def _previous_run(brain: str):
+def _previous_results(brain: str, ids) -> dict:
+    """Each scenario's most recent prior result on this brain: {id: record}. Per scenario,
+    not per file — a targeted `--only` run must not hide the rest of the suite's history."""
+    found = {}
     if not os.path.isdir(RESULTS_DIR):
-        return None
+        return found
     for fn in sorted(os.listdir(RESULTS_DIR), reverse=True):
-        if fn.endswith(".json"):
-            try:
-                with open(os.path.join(RESULTS_DIR, fn)) as f:
-                    prev = json.load(f)
-                if prev.get("brain") == brain:
-                    return prev
-            except Exception:
-                continue
-    return None
+        if not fn.endswith(".json") or len(found) == len(ids):
+            continue
+        try:
+            with open(os.path.join(RESULTS_DIR, fn)) as f:
+                prev = json.load(f)
+        except Exception:
+            continue
+        if prev.get("brain") != brain:
+            continue
+        for sid, rec in prev.get("scenarios", {}).items():
+            if sid in ids and sid not in found:
+                found[sid] = rec
+    return found
 
 
 def main(argv=None) -> int:
@@ -484,18 +491,17 @@ def main(argv=None) -> int:
     elapsed = time.time() - t_start
     brain = "/".join(sorted(brains_seen))
 
-    prev = _previous_run(brain)
+    prev = _previous_results(brain, set(results))
     regressions, fixes = [], []
-    if prev:
-        for sid, r in results.items():
-            p = prev.get("scenarios", {}).get(sid)
-            if not p:
-                continue
-            was, now = p["passed"] == p["trials"], r["passed"] == r["trials"]
-            if was and not now:
-                regressions.append(sid)
-            if now and not was:
-                fixes.append(sid)
+    for sid, r in results.items():
+        p = prev.get(sid)
+        if not p:
+            continue
+        was, now = p["passed"] == p["trials"], r["passed"] == r["trials"]
+        if was and not now:
+            regressions.append(sid)
+        if now and not was:
+            fixes.append(sid)
 
     print(f"\n{full}/{total} scenarios passed ({100 * full // max(total, 1)}%) · "
           f"brain={brain} · API spend ≈ ${spend:.2f} · {elapsed / 60:.1f} min")
@@ -506,7 +512,7 @@ def main(argv=None) -> int:
         print(f"⚠️  {fallback_turns} turn(s) fell back to the API brain mid-run "
               "(subscription limit or login) — those results describe the API brain.")
     if prev:
-        print(f"vs last run ({prev.get('started', '?')[:16]}, {prev.get('git', '?')}): "
+        print(f"vs each scenario's previous result ({len(prev)} with history): "
               f"regressions: {', '.join(regressions) or 'none'} · "
               f"fixed: {', '.join(fixes) or 'none'}")
 
