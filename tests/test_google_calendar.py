@@ -6,6 +6,7 @@ Run: python3 -m unittest discover tests
 import os
 import tempfile
 import unittest
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 from skills import google_calendar as gc
@@ -18,8 +19,11 @@ class TempConfigMixin:
         os.unlink(self.cfg)
         self._p = patch.object(gc, 'CONFIG_PATH', self.cfg)
         self._p.start()
+        self._today = patch.object(gc, '_today', return_value=date(2026, 6, 1))  # fixtures are June
+        self._today.start()
 
     def tearDown(self):
+        self._today.stop()
         self._p.stop()
         if os.path.exists(self.cfg):
             os.unlink(self.cfg)
@@ -93,6 +97,28 @@ class TestStandingRule(TempConfigMixin, unittest.TestCase):
     def test_default_duration_is_one_hour(self):
         body = gc._event_body('X', '2026-06-14', '19:00')
         self.assertIn('2026-06-14T20:00', body['end']['dateTime'])
+
+    def test_past_date_refused_before_any_api_call(self):
+        # Live bug: on Friday 2026-10-16, "monday" became 2026-10-12 (already gone).
+        service = _service()
+        with patch.object(gc, 'get_calendar_service', return_value=service), \
+             patch.object(gc, '_today', return_value=date(2026, 10, 16)):
+            msg = gc.create_calendar_event.invoke({
+                'title': 'HH Call', 'date_iso': '2026-10-12', 'start_time': '09:00'})
+        self.assertIn('Not created', msg)
+        self.assertIn('Monday 2026-10-12 is in the past', msg)
+        self.assertIn('today is Friday 2026-10-16', msg)
+        service.events.assert_not_called()
+
+    def test_today_and_explicit_past_are_allowed(self):
+        gc._save_config({})
+        for args in ({'date_iso': '2026-06-01'},                        # today
+                     {'date_iso': '2026-05-20', 'allow_past': True}):   # asked for the past
+            service = _service()
+            with patch.object(gc, 'get_calendar_service', return_value=service):
+                msg = gc.create_calendar_event.invoke({'title': 'X', **args})
+            self.assertNotIn('Not created', msg)
+            service.events.return_value.insert.assert_called()
 
     def test_bad_date_rejected_before_any_api_call(self):
         service = _service()

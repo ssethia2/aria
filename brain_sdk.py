@@ -17,12 +17,15 @@ Shape: a LangGraph-compatible facade — invoke / stream / get_state / update_st
 telegram_bot, imessage_bot, interact, voice_live and webvoice owner-mode work unchanged.
 Aria's LangChain tools are auto-bridged into an in-process SDK MCP server (no per-tool
 rewrites); Claude Code's own built-in tools are disabled so her toolset stays exactly hers.
-Conversation continuity uses SDK session resume (per thread), plus a small local history
-mirror to serve get_state/update_state (the fast-path's context + persistence).
+Conversation continuity uses SDK session resume (per thread, one session per day — a new
+day starts fresh, bridged with the last few exchanges), plus a small local history mirror
+to serve get_state/update_state (the fast-path's context + persistence). Every user message
+is sent with its timestamp (see stamp()).
 """
 import os
 import json
 import threading
+from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -71,14 +74,30 @@ class BrainUnavailable(Exception):
 CONTEXT_TURNS = 10   # mirror turns bridged into a fallback turn's prompt
 
 
+def stamp(when=None) -> str:
+    """'[Thu 2026-10-22 3:55 PM]' — put in front of every user message. The system prompt's
+    clock alone loses to dates in a long history (probed: a resumed session repeated its
+    earlier "today" over a fresher system prompt; with the message stamped it read the new
+    date). Stamps also date each past message, so old turns read as old."""
+    when = when or datetime.now()
+    return f"[{when.strftime('%a %Y-%m-%d')} {when.strftime('%I:%M %p').lstrip('0')}]"
+
+
+def _mirror_entry(kind: str, content: str) -> dict:
+    return {"type": kind, "content": content, "at": datetime.now().isoformat(timespec="minutes")}
+
+
 def _recent_context(thread_id: str, limit: int = CONTEXT_TURNS) -> str:
     """The last few conversation turns from the unified mirror (both engines write it) —
-    the bridge that lets a fallback turn pick up mid-conversation."""
+    the bridge that lets a fallback turn, or a new day's session, pick up mid-conversation."""
     with _lock:
         mirror = _load_state().get("threads", {}).get(thread_id, {}).get("messages", [])
-    return "\n".join(
-        f"{'User' if m.get('type') == 'human' else 'Aria'}: {(m.get('content') or '')[:400]}"
-        for m in mirror[-limit:])
+
+    def line(m):
+        when = stamp(datetime.fromisoformat(m["at"])) + " " if m.get("at") else ""
+        who = "User" if m.get("type") == "human" else "Aria"
+        return f"{when}{who}: {(m.get('content') or '')[:400]}"
+    return "\n".join(line(m) for m in mirror[-limit:])
 
 
 def _queue_unsynced(thread_id: str, user_text: str, reply: str):
@@ -129,7 +148,6 @@ def _fallback_alert(reason: str):
     subscription limit should never silently turn back into a surprise API bill. The
     message names the likely cause and the fix (re-login vs wait it out)."""
     print(f"[brain] ⚠️ subscription turn failed ({reason}) — serving from the API fallback")
-    from datetime import date
     today = date.today().isoformat()
     if _fallback["alerted"] == today:
         return
@@ -159,7 +177,6 @@ def _billing_alert(source: str):
     """A subscription-brain turn billed the API — the exact silent regression this whole
     feature exists to prevent. Log every time; Telegram the owner once per day."""
     print(f"[brain] ⚠️ apiKeySource={source} — this turn billed the API, not the subscription!")
-    from datetime import date
     today = date.today().isoformat()
     if _alerted["date"] == today:
         return
@@ -234,21 +251,31 @@ class SubscriptionBrain:
         on_tool as they happen (for progress notes)."""
         from claude_agent_sdk import query
 
+        today = date.today().isoformat()
         with _lock:
             state = _load_state()
             th = state.get("threads", {}).get(thread_id, {})
-            session = th.get("session_id")
+            # One SDK session per day. A session resumed for months re-read its whole
+            # history every turn (226K tokens by 2026-10) and anchored on stale dates — and
+            # on its own "my clock's off". A new day starts fresh, bridged from the mirror.
+            session = th.get("session_id") if th.get("session_day") == today else None
             unsynced = list(th.get("unsynced", []))
+            has_history = bool(th.get("messages"))
 
-        # Bridge: exchanges served by the API fallback while the subscription was limited
-        # are absorbed into this turn's prompt, then cleared on success — so the SDK
-        # session regains continuity instead of a hole.
-        prompt = text
-        if unsynced:
+        prompt = f"{stamp()} {text}"
+        if session is None and has_history:
+            prompt = (f"<recent_conversation>For continuity — your most recent exchanges with "
+                      f"the user (context only, already answered):\n"
+                      f"{_recent_context(thread_id)}</recent_conversation>\n\n{prompt}")
+        elif unsynced:
+            # Exchanges served by the API fallback while the subscription was limited are
+            # absorbed into this turn's prompt, then cleared on success — so the SDK
+            # session regains continuity instead of a hole. (A new session's mirror bridge
+            # above already includes them.)
             gap = "\n".join(f"User: {u['you']}\nAria: {u['aria']}" for u in unsynced)
             prompt = (f"<missed_context>While you were unavailable, these exchanges were "
                       f"handled for you (already answered — context only, do not re-answer):"
-                      f"\n{gap}</missed_context>\n\n{text}")
+                      f"\n{gap}</missed_context>\n\n{prompt}")
 
         result = {"reply": None, "session_id": session}
 
@@ -309,10 +336,10 @@ class SubscriptionBrain:
             state = _load_state()
             th = state.setdefault("threads", {}).setdefault(thread_id, {})
             th["session_id"] = result["session_id"]
+            th["session_day"] = today
             th["unsynced"] = []          # the gap is absorbed — clear only on success
             mirror = th.setdefault("messages", [])
-            mirror.extend([{"type": "human", "content": text},
-                           {"type": "ai", "content": reply}])
+            mirror.extend([_mirror_entry("human", text), _mirror_entry("ai", reply)])
             th["messages"] = mirror[-MIRROR_MAX:]
             _save_state(state)
         return reply
@@ -347,6 +374,7 @@ class SubscriptionBrain:
     def _bridged_payload(text: str, ctx: str):
         """The fallback turn's payload, carrying recent cross-engine context so the API
         agent picks up mid-conversation instead of amnesiac."""
+        text = f"{stamp()} {text}"
         if not ctx:
             return {"messages": [HumanMessage(content=text)]}
         return {"messages": [HumanMessage(content=(
@@ -422,7 +450,7 @@ class SubscriptionBrain:
         entries = []
         for m in (update or {}).get("messages", []):
             kind = "human" if isinstance(m, HumanMessage) else "ai"
-            entries.append({"type": kind, "content": getattr(m, "content", "") or ""})
+            entries.append(_mirror_entry(kind, getattr(m, "content", "") or ""))
         if not entries:
             return
         with _lock:

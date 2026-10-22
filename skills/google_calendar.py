@@ -159,10 +159,26 @@ def configure_shared_calendar(calendar_id: str, label: str = "shared") -> str:
     return f"Saved — events will now be mirrored to '{label}' ({calendar_id}) in yellow."
 
 
+def _today():
+    return datetime.now().date()
+
+
+def _past_date_refusal(date_iso: str, verb: str):
+    """None if date_iso is today or later; otherwise a message telling the agent to recompute.
+    (Caught live: on a Friday, "monday" became the Monday already gone.)"""
+    day = datetime.strptime(date_iso, '%Y-%m-%d').date()
+    today = _today()
+    if day >= today:
+        return None
+    return (f"Not {verb}: {day:%A %Y-%m-%d} is in the past — today is {today:%A %Y-%m-%d}. "
+            f"Recompute the date (a bare weekday means the next one that hasn't passed), or "
+            f"pass allow_past=true only if the user explicitly wants a past date.")
+
+
 @tool
 def create_calendar_event(title: str, date_iso: str, start_time: str = None,
                           end_time: str = None, description: str = None,
-                          calendars: str = 'both') -> str:
+                          calendars: str = 'both', allow_past: bool = False) -> str:
     """Create an event on the user's calendar(s). Use this for appointments/events
     with a date — commitments/promises belong in add_commitment instead.
 
@@ -175,6 +191,7 @@ def create_calendar_event(title: str, date_iso: str, start_time: str = None,
         calendars: 'both' (DEFAULT — follow the user's standing instruction: personal
             + shared-in-yellow), 'personal_only', or 'shared_only'. Deviate from
             'both' ONLY when the user explicitly asks (e.g. "just my personal").
+        allow_past: True only when the user explicitly wants an event on a past date.
     """
     if calendars not in ('both', 'personal_only', 'shared_only'):
         return f"Error: calendars must be 'both', 'personal_only', or 'shared_only', got {calendars!r}."
@@ -186,6 +203,10 @@ def create_calendar_event(title: str, date_iso: str, start_time: str = None,
             datetime.strptime(end_time, '%H:%M')
     except ValueError as e:
         return f"Error: bad date/time format ({e}). Use YYYY-MM-DD and HH:MM."
+    if not allow_past:
+        refusal = _past_date_refusal(date_iso, "created")
+        if refusal:
+            return refusal
 
     service = get_calendar_service()
     if not service:
@@ -272,7 +293,7 @@ def _ambiguous_msg(groups):
 @tool
 def update_calendar_event(query: str, date_iso: str = None, new_title: str = None,
                           new_date_iso: str = None, new_start_time: str = None,
-                          new_end_time: str = None) -> str:
+                          new_end_time: str = None, allow_past: bool = False) -> str:
     """Edit an existing calendar event. Finds it by searching both calendars for `query`
     (optionally narrowed by date_iso), then applies the change to EVERY copy (personal +
     shared). Use to rename or reschedule. If several distinct events match, it lists them
@@ -284,7 +305,15 @@ def update_calendar_event(query: str, date_iso: str = None, new_title: str = Non
         new_title: New event title.
         new_date_iso / new_start_time / new_end_time: New date/time (HH:MM 24h). Omit
             start_time to make it all-day on the new date.
+        allow_past: True only when the user explicitly wants to move it to a past date.
     """
+    if new_date_iso and not allow_past:
+        try:
+            refusal = _past_date_refusal(new_date_iso, "moved")
+        except ValueError as e:
+            return f"Error: bad date format ({e}). Use YYYY-MM-DD."
+        if refusal:
+            return refusal
     service = get_calendar_service()
     if not service:
         return "Calendar isn't connected yet."

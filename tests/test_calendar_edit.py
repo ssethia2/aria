@@ -5,6 +5,7 @@ Run: python3 -m unittest discover tests
 import os
 import tempfile
 import unittest
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 from skills import google_calendar as gc
@@ -29,9 +30,12 @@ class TempConfig(unittest.TestCase):
     def setUp(self):
         fd, self.cfg = tempfile.mkstemp(suffix='.json'); os.close(fd); os.unlink(self.cfg)
         self._p = patch.object(gc, 'CONFIG_PATH', self.cfg); self._p.start()
+        self._today = patch.object(gc, '_today', return_value=date(2026, 6, 1))  # fixtures are June
+        self._today.start()
         gc._save_config({'shared_calendar_id': 'gf123'})
 
     def tearDown(self):
+        self._today.stop()
         self._p.stop()
         if os.path.exists(self.cfg):
             os.unlink(self.cfg)
@@ -70,6 +74,13 @@ class TestDelete(TempConfig):
 
 
 class TestUpdate(TempConfig):
+    def test_move_into_the_past_refused(self):
+        service = _service_with({'primary': [_ev('p1', 'HH Call', '2026-06-12T09:00:00-04:00')]})
+        with patch.object(gc, 'get_calendar_service', return_value=service):
+            msg = gc.update_calendar_event.invoke({'query': 'hh call', 'new_date_iso': '2026-05-25'})
+        self.assertIn('Not moved', msg)
+        service.events.return_value.patch.assert_not_called()
+
     def test_rename_patches_both_copies(self):
         events = {
             'primary': [_ev('p1', 'Dinner', '2026-06-20T19:00:00-04:00')],

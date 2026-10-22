@@ -33,3 +33,12 @@
       expect:
         path: quick
         reply_matches: ['12\.6']
+
+- id: relative-deadline-no-date-question
+  why: "Live bug: after one date slip she blamed her clock and kept asking the user for today's date. Every message carries its timestamp — work it out, never ask."
+  turns:
+    - user: "I need to do the coding assessment within the next 10 days."
+      expect:
+        called_with:
+          add_commitment: {due_date_iso: {one_of: ["{{today+10}}", "{{today+9}}"]}}
+        reply_not_matches: ["what('s| is) today", "today's date", "what (date|day) is it", "clock"]

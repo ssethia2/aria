@@ -5,8 +5,10 @@ Run: python3 -m unittest discover tests
 """
 import os
 import json
+import re
 import tempfile
 import unittest
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -269,7 +271,11 @@ class TestHistoryBridge(TempState):
              patch.object(brain_sdk, "_fallback_alert"):
             b.invoke({"messages": [HumanMessage(content="when is the dentist?")]}, config=cfg)
 
-        # subscription comes back: the SDK prompt must carry the missed exchange
+        # subscription comes back (same day, session resumed): the prompt must carry the
+        # missed exchange
+        st = json.loads(brain_sdk.STATE_PATH.read_text())
+        st["threads"]["hb2"].update(session_id="s1", session_day=date.today().isoformat())
+        brain_sdk.STATE_PATH.write_text(json.dumps(st))
         prompts = []
 
         def fake_query(prompt=None, options=None):
@@ -295,9 +301,100 @@ class TestHistoryBridge(TempState):
 
         # unsynced survives a FAILED sub turn (cleared only on success)
         with patch.object(brain_sdk, "STATE_PATH", brain_sdk.STATE_PATH):
-            import json
             st = json.loads(brain_sdk.STATE_PATH.read_text())
         self.assertTrue(st["threads"]["hb2"]["unsynced"])
+
+
+# Stand-ins named like the SDK's message classes (_run_turn dispatches on the class name).
+class AssistantMessage:
+    def __init__(self, text):
+        self.content = [type("B", (), {"text": text})()]
+
+
+class ResultMessage:
+    def __init__(self, sid):
+        self.session_id, self.is_error, self.subtype, self.result = sid, False, "success", ""
+
+
+STAMPED = r"\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{1,2}:\d{2} [AP]M\]"
+
+
+class TestDatesAndDailySessions(TempState):
+    """Live bug (2026-10-16): one SDK session resumed since July re-read 226K tokens of
+    undated history; on a Friday she put "monday" on the Monday already gone, then blamed
+    her clock and kept asking for the date for days."""
+
+    def _turn(self, b, thread, text):
+        seen = {}
+
+        def fake_query(prompt=None, options=None):
+            seen["prompt"], seen["resume"] = prompt, options.resume
+
+            async def gen():
+                yield AssistantMessage("ok")
+                yield ResultMessage("sess-new")
+            return gen()
+
+        def fake_anyio_run(fn):
+            import asyncio
+            asyncio.run(fn())
+
+        with patch("claude_agent_sdk.query", fake_query), \
+             patch.object(brain_sdk.anyio, "run", fake_anyio_run), \
+             patch.object(SubscriptionBrain, "_record_usage"):
+            b._run_turn(thread, text)
+        return seen
+
+    def _seed(self, thread, **th):
+        brain_sdk.STATE_PATH.write_text(json.dumps({"threads": {thread: th}}))
+
+    def _state(self, thread):
+        return json.loads(brain_sdk.STATE_PATH.read_text())["threads"][thread]
+
+    def test_stamp_format(self):
+        self.assertEqual(brain_sdk.stamp(datetime(2026, 10, 16, 17, 5)), "[Fri 2026-10-16 5:05 PM]")
+        self.assertEqual(brain_sdk.stamp(datetime(2026, 10, 22, 9, 30)), "[Thu 2026-10-22 9:30 AM]")
+
+    def test_every_message_is_sent_stamped(self):
+        seen = self._turn(_brain(), "new", "add hh call monday 9am")
+        self.assertRegex(seen["prompt"], f"^{STAMPED} add hh call monday 9am$")
+
+    def test_new_day_starts_a_fresh_session_bridged_from_the_mirror(self):
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        self._seed("t", session_id="old", session_day=yesterday, messages=[
+            {"type": "human", "content": "add hh call monday", "at": "2026-10-16T17:50"},
+            {"type": "ai", "content": "Added for Monday 10/19."}])
+        seen = self._turn(_brain(), "t", "thanks")
+        self.assertIsNone(seen["resume"])                           # not the old session
+        self.assertIn("<recent_conversation>", seen["prompt"])
+        self.assertIn("[Fri 2026-10-16 5:50 PM] User: add hh call monday", seen["prompt"])
+        self.assertIn("Aria: Added for Monday 10/19.", seen["prompt"])
+        self.assertRegex(seen["prompt"], f"{STAMPED} thanks$")
+        th = self._state("t")
+        self.assertEqual((th["session_id"], th["session_day"]), ("sess-new", date.today().isoformat()))
+
+    def test_legacy_session_without_a_day_is_rotated(self):
+        self._seed("t", session_id="since-july", messages=[{"type": "human", "content": "hi"}])
+        self.assertIsNone(self._turn(_brain(), "t", "hello")["resume"])
+
+    def test_same_day_resumes_without_a_bridge(self):
+        self._seed("t", session_id="today-s", session_day=date.today().isoformat(),
+                   messages=[{"type": "human", "content": "hi"}])
+        seen = self._turn(_brain(), "t", "and tomorrow?")
+        self.assertEqual(seen["resume"], "today-s")
+        self.assertNotIn("<recent_conversation>", seen["prompt"])
+
+    def test_mirror_entries_are_timestamped(self):
+        self._turn(_brain(), "t", "hello")
+        for m in self._state("t")["messages"]:
+            datetime.fromisoformat(m["at"])                         # parseable timestamp
+        b = _brain()
+        b.update_state({"configurable": {"thread_id": "t"}}, {"messages": [AIMessage(content="x")]})
+        self.assertIn("at", self._state("t")["messages"][-1])
+
+    def test_fallback_turn_is_stamped_too(self):
+        msg = SubscriptionBrain._bridged_payload("what's due today?", "")["messages"][0].content
+        self.assertRegex(msg, f"^{STAMPED} what's due today\\?$")
 
 
 class TestRouting(unittest.TestCase):

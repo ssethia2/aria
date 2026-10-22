@@ -62,3 +62,11 @@
         called_with:
           create_calendar_event: {date_iso: "{{today+2}}", start_time: {time: "12:00"}, calendars: {contains: personal}}
         not_called: [add_standing_instruction, update_standing_instruction]
+
+- id: bare-weekday-means-next
+  why: "Live bug: on a Friday, 'monday' went on the Monday already gone (10/12, not 10/19). A bare weekday that has passed this week means the next one."
+  turns:
+    - user: "Add a call with Rohan on {{weekday:today-2}} at 10am."
+      expect:
+        called_with:
+          create_calendar_event: {date_iso: "{{today+5}}", start_time: {time: "10:00"}}

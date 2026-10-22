@@ -392,7 +392,14 @@ def build_system_message() -> SystemMessage:
          "cache_control": {"type": "ephemeral", "ttl": ttl}},
         {"type": "text",
          "text": f"The current date and time is: {now}. Use this for any date math "
-                 f"(e.g. computing a commitment's date from 'tomorrow' or 'Friday')."},
+                 f"(e.g. computing a commitment's date from 'tomorrow' or 'Friday'). The "
+                 f"user's messages may also start with when they were sent, e.g. "
+                 f"[Thu 2026-10-22 3:55 PM]. This clock and those stamps are always right: "
+                 f"NEVER ask the user what today's date is, and never say your clock is off "
+                 f"— if a date came out wrong, your arithmetic slipped; recompute and fix it. "
+                 f"A bare weekday means the NEXT one that hasn't passed (on a Friday, "
+                 f"\"Monday\" is 3 days out, never the Monday already gone). Never schedule "
+                 f"or set a due date in the past unless they explicitly mean the past."},
     ])
 
 
