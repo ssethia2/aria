@@ -19,8 +19,7 @@ Aria's LangChain tools are auto-bridged into an in-process SDK MCP server (no pe
 rewrites); Claude Code's own built-in tools are disabled so her toolset stays exactly hers.
 Conversation continuity uses SDK session resume (per thread, one session per day — a new
 day starts fresh, bridged with the last few exchanges), plus a small local history mirror
-to serve get_state/update_state (the fast-path's context + persistence). Every user message
-is sent with its timestamp (see stamp()).
+to serve get_state/update_state (the fast-path's context + persistence).
 """
 import os
 import json
@@ -75,10 +74,9 @@ CONTEXT_TURNS = 10   # mirror turns bridged into a fallback turn's prompt
 
 
 def stamp(when=None) -> str:
-    """'[Thu 2026-10-22 3:55 PM]' — put in front of every user message. The system prompt's
-    clock alone loses to dates in a long history (probed: a resumed session repeated its
-    earlier "today" over a fresher system prompt; with the message stamped it read the new
-    date). Stamps also date each past message, so old turns read as old."""
+    """'[Thu 2026-10-22 3:55 PM]' — dates each carried-over line in a new day's bridge, so
+    old exchanges read as old. (Not put on live messages: Claude Code already injects the
+    real date every turn, and a stamp in front of the message made replies terse.)"""
     when = when or datetime.now()
     return f"[{when.strftime('%a %Y-%m-%d')} {when.strftime('%I:%M %p').lstrip('0')}]"
 
@@ -255,14 +253,15 @@ class SubscriptionBrain:
         with _lock:
             state = _load_state()
             th = state.get("threads", {}).get(thread_id, {})
-            # One SDK session per day. A session resumed for months re-read its whole
-            # history every turn (226K tokens by 2026-10) and anchored on stale dates — and
-            # on its own "my clock's off". A new day starts fresh, bridged from the mirror.
+            # One SDK session per day. A session resumed since July re-read its whole history
+            # every turn (226K tokens by 2026-10), and its own "my clock's off" from one
+            # date slip kept her asking for the date days later. A new day starts fresh,
+            # bridged from the mirror with each carried-over line dated.
             session = th.get("session_id") if th.get("session_day") == today else None
             unsynced = list(th.get("unsynced", []))
             has_history = bool(th.get("messages"))
 
-        prompt = f"{stamp()} {text}"
+        prompt = text
         if session is None and has_history:
             prompt = (f"<recent_conversation>For continuity — your most recent exchanges with "
                       f"the user (context only, already answered):\n"
@@ -374,7 +373,6 @@ class SubscriptionBrain:
     def _bridged_payload(text: str, ctx: str):
         """The fallback turn's payload, carrying recent cross-engine context so the API
         agent picks up mid-conversation instead of amnesiac."""
-        text = f"{stamp()} {text}"
         if not ctx:
             return {"messages": [HumanMessage(content=text)]}
         return {"messages": [HumanMessage(content=(

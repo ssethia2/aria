@@ -316,13 +316,10 @@ class ResultMessage:
         self.session_id, self.is_error, self.subtype, self.result = sid, False, "success", ""
 
 
-STAMPED = r"\[(Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} \d{1,2}:\d{2} [AP]M\]"
-
-
 class TestDatesAndDailySessions(TempState):
-    """Live bug (2026-10-16): one SDK session resumed since July re-read 226K tokens of
-    undated history; on a Friday she put "monday" on the Monday already gone, then blamed
-    her clock and kept asking for the date for days."""
+    """Live bug (2026-10-16): on a Friday she put "monday" on the Monday already gone, said
+    her clock was off, and — in one SDK session resumed since July (226K tokens/turn) —
+    kept asking for the date days later."""
 
     def _turn(self, b, thread, text):
         seen = {}
@@ -355,9 +352,11 @@ class TestDatesAndDailySessions(TempState):
         self.assertEqual(brain_sdk.stamp(datetime(2026, 10, 16, 17, 5)), "[Fri 2026-10-16 5:05 PM]")
         self.assertEqual(brain_sdk.stamp(datetime(2026, 10, 22, 9, 30)), "[Thu 2026-10-22 9:30 AM]")
 
-    def test_every_message_is_sent_stamped(self):
+    def test_message_is_sent_as_is(self):
+        # Claude Code injects the real date every turn; a stamp on the message made
+        # replies terse in evals, so live messages go through untouched.
         seen = self._turn(_brain(), "new", "add hh call monday 9am")
-        self.assertRegex(seen["prompt"], f"^{STAMPED} add hh call monday 9am$")
+        self.assertEqual(seen["prompt"], "add hh call monday 9am")
 
     def test_new_day_starts_a_fresh_session_bridged_from_the_mirror(self):
         yesterday = (date.today() - timedelta(days=1)).isoformat()
@@ -369,7 +368,7 @@ class TestDatesAndDailySessions(TempState):
         self.assertIn("<recent_conversation>", seen["prompt"])
         self.assertIn("[Fri 2026-10-16 5:50 PM] User: add hh call monday", seen["prompt"])
         self.assertIn("Aria: Added for Monday 10/19.", seen["prompt"])
-        self.assertRegex(seen["prompt"], f"{STAMPED} thanks$")
+        self.assertTrue(seen["prompt"].endswith("</recent_conversation>\n\nthanks"))
         th = self._state("t")
         self.assertEqual((th["session_id"], th["session_day"]), ("sess-new", date.today().isoformat()))
 
@@ -391,10 +390,6 @@ class TestDatesAndDailySessions(TempState):
         b = _brain()
         b.update_state({"configurable": {"thread_id": "t"}}, {"messages": [AIMessage(content="x")]})
         self.assertIn("at", self._state("t")["messages"][-1])
-
-    def test_fallback_turn_is_stamped_too(self):
-        msg = SubscriptionBrain._bridged_payload("what's due today?", "")["messages"][0].content
-        self.assertRegex(msg, f"^{STAMPED} what's due today\\?$")
 
 
 class TestRouting(unittest.TestCase):
