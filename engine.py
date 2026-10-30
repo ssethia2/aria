@@ -200,9 +200,147 @@ Return [] if nothing qualifies — that should be the common case."""
         super().__init__(name="email-digest", interval_seconds=interval_seconds)
         self.now_fn = now_fn or datetime.now
 
+    PROOF_PROMPT = """You check whether new emails PROVE the user already finished one of their
+open commitments.
+
+Open commitments:
+{commitments}
+
+New emails ("received", or "sent" by the user):
+{emails}
+
+An email proves a commitment DONE only when it shows THIS commitment complete:
+- the user saying they did it (a sent email: "I just completed the assessment"),
+- a confirmation of it ("Thanks for taking the Acme hiring test", "your application was
+  submitted", "your appointment is booked" for a "schedule X" item), or
+- the next stage, which can't happen until it's done (an interview invite from the company
+  whose coding test it was).
+NOT proof: an email that's merely about the same topic, a reminder or deadline notice, an
+invitation to START it, or progress short of finishing. When in doubt, it is not proof.
+
+Return ONLY a raw JSON array (no markdown), one object per commitment proven done:
+[{{"commitment_id": <number>, "email_id": "<email id>", "evidence": "<what the email shows, a few words>"}}]
+Return [] if none — that should be the common case."""
+
+    # Kinds an email can prove done. reply_owed has its own sent-mail check
+    # (ReplyResolveMonitor); birthdays and other recurring items roll forward, never close.
+    PROVABLE_KINDS = ('deadline', 'promise')
+
+    # Task verbs and filler that say nothing about WHICH commitment an email is about.
+    _GENERIC_WORDS = {'the', 'and', 'for', 'with', 'from', 'about', 'through', 'out', 'get',
+                      'buy', 'sell', 'fix', 'figure', 'finish', 'schedule', 'send', 'reply',
+                      'call', 'make', 'book', 'urgent'}
+
+    @classmethod
+    def _words(cls, text: str) -> set:
+        return {w for w in re.findall(r'[a-z0-9]+', text.lower()) if len(w) >= 3} - cls._GENERIC_WORDS
+
+    @classmethod
+    def _email_names_it(cls, commitment: dict, email: dict, open_items: dict) -> bool:
+        """Hard check on the model's pick: the email must contain a word that only THIS
+        commitment has ("acme", "rohan"). In a dry run over two weeks of real mail the
+        light model pinned one email's "I just completed the assessment" on an unrelated item
+        — the wrong-item close that COMPLETION IS DESTRUCTIVE exists to prevent."""
+        others = set().union(*(cls._words(c['description']) for cid, c in open_items.items()
+                               if cid != commitment['id']))
+        distinctive = cls._words(commitment['description']) - others
+        text = " ".join(str(email.get(k, '')) for k in ('subject', 'snippet', 'from', 'to'))
+        return bool(distinctive & cls._words(text))
+
     def check(self, state: dict) -> list:
-        self._screen_new_mail(state)
-        return self._maybe_flush_digest(state)
+        since = state.get("last_check_ts", time.time() - self.interval_seconds)
+        inbound = self._screen_new_mail(state) or []
+        try:
+            closed = self._close_proven(state, inbound, since)
+        except Exception as e:  # never let the proof check block the digest
+            print(f"[engine] email-digest: proof check failed: {e}")
+            closed = []
+        return closed + self._maybe_flush_digest(state)
+
+    def _new_sent_mail(self, state: dict, since: float) -> list:
+        """Mail the user sent since the last tick ("I just completed the assessment" is
+        often the only record that something got done). Gmail API only."""
+        import email_backend
+        from skills.email_manager import get_gmail_service
+        if email_backend.using_app_password():
+            return []
+        service = get_gmail_service()
+        if not service:
+            return []
+        query = f'in:sent after:{int(since - 120)} -subject:"Daily Assistant Summary"'
+        resp = service.users().messages().list(userId='me', q=query, maxResults=10).execute()
+        seen = state.get("seen_sent_ids", [])
+        sent = []
+        for m in resp.get('messages', []):
+            if m['id'] in seen:
+                continue
+            msg = service.users().messages().get(
+                userId='me', id=m['id'], format='metadata',
+                metadataHeaders=['Subject', 'To']).execute()
+            headers = {h['name']: h['value'] for h in msg['payload'].get('headers', [])}
+            sent.append({'id': m['id'], 'subject': headers.get('Subject', ''),
+                         'to': headers.get('To', ''), 'snippet': msg.get('snippet', '')})
+        state["seen_sent_ids"] = (seen + [e['id'] for e in sent])[-300:]
+        return sent
+
+    def _close_proven(self, state: dict, inbound: list, since: float) -> list:
+        """Close open commitments that new mail proves done, and say so. The screener above
+        only asks "is this digest-worthy?", so a test platform's "thanks for taking the test",
+        the company's interview invite, and his own "I just completed it" all arrived while
+        Aria kept nudging him about the assessment for two more days."""
+        from skills import commitment_manager
+        sent = self._new_sent_mail(state, since)
+        emails = ([{'id': e['id'], 'direction': 'received', 'from': e['sender'],
+                    'subject': e['subject'], 'snippet': e.get('snippet', '')} for e in inbound]
+                  + [{'id': e['id'], 'direction': 'sent', 'to': e['to'],
+                      'subject': e['subject'], 'snippet': e['snippet']} for e in sent])
+        if not emails:
+            return []
+        open_items = {c['id']: c for c in commitment_manager.get_open_commitments()
+                      if c['kind'] in self.PROVABLE_KINDS and not c.get('recurring')}
+        if not open_items:
+            return []
+
+        listing = "\n".join(f"#{c['id']} {c['description']}"
+                            + (f" (due {c['due_date']})" if c.get('due_date') else "")
+                            for c in open_items.values())
+        response = _get_llm().invoke(self.PROOF_PROMPT.format(
+            commitments=listing, emails=json.dumps(emails, indent=2)))
+        content = response.content
+        if isinstance(content, list):
+            content = next((b['text'] for b in content
+                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        try:
+            proven = _parse_llm_json(content)
+        except json.JSONDecodeError:
+            print(f"[engine] email-digest: unparseable proof result: {content[:200]}")
+            return []
+
+        by_id = {e['id']: e for e in emails}
+        offered = dict(open_items)
+        notes = []
+        for item in proven if isinstance(proven, list) else []:
+            try:
+                cid = int(str(item.get('commitment_id', '')).lstrip('#'))
+            except ValueError:
+                continue
+            email = by_id.get(item.get('email_id'))
+            c = open_items.get(cid)
+            if not c or not email:
+                continue
+            if not self._email_names_it(c, email, offered):
+                print(f"[engine] email-digest: rejected proof for #{cid} "
+                      f"({c['description']!r}) — email {email['subject']!r} doesn't name it")
+                continue
+            del open_items[cid]             # one close per commitment
+            if commitment_manager.complete(cid) is None:
+                continue
+            source = ("your email" if email['direction'] == 'sent'
+                      else email['from'].split('<')[0].strip(' "') or email['from'])
+            notes.append(Notification(
+                f"✅ Marked done: {c['description']} — {item.get('evidence', '').strip()} "
+                f"({source}: “{email['subject']}”). If that's wrong, say so and I'll reopen it."))
+        return notes
 
     def _screen_new_mail(self, state: dict):
         import email_backend
@@ -239,7 +377,7 @@ Return [] if nothing qualifies — that should be the common case."""
         state["last_check_ts"] = now_ts
         state["seen_ids"] = (seen + [e['id'] for e in new])[-300:]
         if not new:
-            return
+            return []
 
         # Deterministic pre-filter: drop bulk mail before spending an LLM call on it.
         from email_filter import is_bulk
@@ -248,7 +386,7 @@ Return [] if nothing qualifies — that should be the common case."""
         if dropped:
             print(f"[engine] email-digest: skipped {dropped} bulk email(s) before LLM screening")
         if not emails:
-            return
+            return []
 
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
         response = _get_llm().invoke(
@@ -261,7 +399,7 @@ Return [] if nothing qualifies — that should be the common case."""
             flagged = _parse_llm_json(content)
         except json.JSONDecodeError:
             print(f"[engine] email-digest: unparseable screen result: {content[:200]}")
-            return
+            return emails
 
         from skills import commitment_manager
         by_id = {e['id']: e for e in emails}
@@ -306,6 +444,7 @@ Return [] if nothing qualifies — that should be the common case."""
                 converted.append(email['id'])
             state.setdefault("pending_digest", []).append(entry)
         state["reply_commitment_ids"] = converted[-300:]
+        return emails
 
     def _maybe_flush_digest(self, state: dict) -> list:
         now = self.now_fn()

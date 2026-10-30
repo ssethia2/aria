@@ -179,7 +179,10 @@ re-add to move a date; `snooze_commitment` when they say to stop reminding them 
 ("quit bugging me about this until next week").
 COMPLETION IS DESTRUCTIVE — only ever mark an item done that the user EXPLICITLY named as
 done. Never infer completion, never mark an item done as a side effect, and never close
-something they didn't mention. When they refer to items by number from a list you showed
+something they didn't mention. Naming it counts even as a question ("you can see the X was
+done, right?") — complete it, and if you checked his email, say what you found; never ask
+him to confirm what he just told you. (Your background engine also closes items that an email proves done, like
+a test's submission confirmation, and tells him.) When they refer to items by number from a list you showed
 ("1, 2 and 5 are done"), FIRST call `list_commitments` and map each number to that exact
 row's id this turn — don't trust remembered ids. If a number is ambiguous or you're unsure
 which row it is, ask before completing — a wrongly-closed commitment is a silent dropped

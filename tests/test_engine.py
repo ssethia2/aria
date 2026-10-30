@@ -307,6 +307,21 @@ class TestCommitmentMonitor(TempStateMixin, unittest.TestCase):
 
 
 class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        import skills.commitment_manager as cm
+        fd, self._db = tempfile.mkstemp(suffix=".db")   # never the real commitments store
+        os.close(fd)
+        os.unlink(self._db)
+        self._db_patch = patch.object(cm, 'DB_PATH', self._db)
+        self._db_patch.start()
+
+    def tearDown(self):
+        self._db_patch.stop()
+        if os.path.exists(self._db):
+            os.unlink(self._db)
+        super().tearDown()
+
     def _service(self, msg_ids):
         service = MagicMock()
         service.users.return_value.messages.return_value.list.return_value \
@@ -423,6 +438,123 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
              patch('email_backend.using_app_password', return_value=False):
             mon.check({})
         llm.invoke.assert_not_called()             # bulk mail never reached the LLM
+
+    # --- closing commitments that email proves done ---
+
+    def _mail(self, inbox=(), sent=()):
+        """A Gmail stub: `inbox` / `sent` are (id, subject, sender_or_to, snippet) tuples."""
+        msgs = {m[0]: m for m in (*inbox, *sent)}
+        service = MagicMock()
+        api = service.users.return_value.messages.return_value
+        api.list.side_effect = lambda **kw: MagicMock(execute=MagicMock(return_value={
+            'messages': [{'id': m[0]} for m in (sent if 'in:sent' in kw['q'] else inbox)]}))
+        api.get.side_effect = lambda **kw: MagicMock(execute=MagicMock(return_value={
+            'payload': {'headers': [{'name': 'Subject', 'value': msgs[kw['id']][1]},
+                                    {'name': 'From', 'value': msgs[kw['id']][2]},
+                                    {'name': 'To', 'value': msgs[kw['id']][2]}]},
+            'snippet': msgs[kw['id']][3]}))
+        return service
+
+    def _check(self, service, *llm_replies):
+        llm = MagicMock()
+        llm.invoke.side_effect = [MagicMock(content=r) for r in llm_replies]
+        mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 10, 30, 12, 0))
+        with patch('skills.email_manager.get_gmail_service', return_value=service), \
+             patch.object(engine, '_get_llm', return_value=llm), \
+             patch('email_backend.using_app_password', return_value=False):
+            return mon.check({}), llm
+
+    def test_inbound_proof_closes_the_commitment_and_says_so(self):
+        """The assessment miss: the test platform's 'thanks for taking the test' arrived, and she kept
+        nudging him about the assessment for two more days."""
+        import skills.commitment_manager as cm
+        cid = cm.add("Acme coding assessment", kind='deadline', due_date='2026-10-31')
+        service = self._mail(inbox=[('m1', 'Thanks for taking the Acme Hiring Test (Java)',
+                                     'Acme Hiring Team <tests@assess.example.com>',
+                                     'Submission Confirmation. Thanks for completing the test.')])
+        out, llm = self._check(service, '[]', f'[{{"commitment_id": {cid}, "email_id": "m1", '
+                                              f'"evidence": "the test platform confirmed your submission"}}]')
+        self.assertEqual(cm.get_open_commitments(), [])
+        self.assertEqual(len(out), 1)
+        self.assertIn("Marked done: Acme coding assessment", out[0].text)
+        self.assertIn("reopen", out[0].text)
+        self.assertIn(f"#{cid} Acme coding assessment (due 2026-10-31)", llm.invoke.call_args[0][0])
+
+    def test_his_own_sent_mail_counts_as_proof(self):
+        import skills.commitment_manager as cm
+        cid = cm.add("Acme coding assessment", kind='deadline', due_date='2026-10-31')
+        service = self._mail(sent=[('s1', 'Re: Acme - Next Steps', 'Mike <mike@acme.com>',
+                                    'Hi Mike, I just completed the virtual assessment.')])
+        out, llm = self._check(service, f'[{{"commitment_id": {cid}, "email_id": "s1", '
+                                         f'"evidence": "you told Mike you completed it"}}]')
+        self.assertEqual(llm.invoke.call_count, 1)        # no inbound → no digest screening
+        self.assertIn('"direction": "sent"', llm.invoke.call_args[0][0])
+        self.assertEqual(cm.get_open_commitments(), [])
+        self.assertIn("(your email:", out[0].text)
+
+    def test_no_proof_leaves_it_open_and_quiet(self):
+        import skills.commitment_manager as cm
+        cm.add("Acme coding assessment", kind='deadline', due_date='2026-10-31')
+        service = self._mail(inbox=[('m1', 'Your Acme Hiring Test Invitation',
+                                     'Acme <tests@assess.example.com>', 'Please complete')])
+        out, _ = self._check(service, '[]', '[]')
+        self.assertEqual(out, [])
+        self.assertEqual(len(cm.get_open_commitments()), 1)
+
+    def test_made_up_ids_close_nothing(self):
+        import skills.commitment_manager as cm
+        cid = cm.add("Acme coding assessment", kind='deadline')
+        service = self._mail(inbox=[('m1', 'Thanks for taking the test', 'HR <hr@acme.com>', 'done')])
+        out, _ = self._check(service, '[]', f'[{{"commitment_id": {cid + 99}, "email_id": "m1"}}, '
+                                            f'{{"commitment_id": {cid}, "email_id": "nope"}}]')
+        self.assertEqual(out, [])
+        self.assertEqual(len(cm.get_open_commitments()), 1)
+
+    def test_proof_pinned_on_the_wrong_commitment_is_rejected(self):
+        """From a real dry run: the model tied an "I just completed the assessment" email
+        to an unrelated item. The email has to name the commitment it closes."""
+        import skills.commitment_manager as cm
+        wrong = cm.add("Renew prescription", kind='promise')
+        right = cm.add("Acme coding assessment", kind='deadline')
+        service = self._mail(sent=[('s1', 'Re: Acme - Next Steps', 'Mike <mike@acme.com>',
+                                    'Hi Mike, I just completed the virtual assessment.')])
+        out, _ = self._check(service, f'[{{"commitment_id": {wrong}, "email_id": "s1", '
+                                      f'"evidence": "completed the assessment"}}]')
+        self.assertEqual(out, [])
+        self.assertEqual({c['id'] for c in cm.get_open_commitments()}, {wrong, right})
+
+    def test_words_shared_by_two_commitments_dont_count_as_naming_either(self):
+        """'wedding gift' is in both gift items — only 'vivek' says which one."""
+        import skills.commitment_manager as cm
+        swastik = cm.add("Swastik & Pulkit wedding gift (urgent)", kind='promise')
+        vivek = cm.add("Buy Vivek's wedding gift (urgent)", kind='promise')
+        service = self._mail(inbox=[('m1', 'Your order: wedding gift for Vivek',
+                                     'Shop <orders@shop.com>', 'Your wedding gift order shipped')])
+        out, _ = self._check(service, '[]', f'[{{"commitment_id": {swastik}, "email_id": "m1"}}, '
+                                            f'{{"commitment_id": {vivek}, "email_id": "m1"}}]')
+        self.assertEqual([c['id'] for c in cm.get_open_commitments()], [swastik])
+        self.assertEqual(len(out), 1)
+        self.assertIn("Vivek", out[0].text)
+
+    def test_replies_owed_and_recurring_items_are_never_offered(self):
+        """reply_owed has its own sent-mail check; birthdays roll forward, never close."""
+        import skills.commitment_manager as cm
+        cm.add("Reply to Rohan: Trip plans?", kind='reply_owed')
+        cm.add("Mom's birthday", kind='people_date', due_date='2027-03-14', recurring='yearly')
+        service = self._mail(sent=[('s1', 'Re: Trip plans?', 'Rohan <r@x.com>', 'Sounds good')])
+        out, llm = self._check(service)
+        llm.invoke.assert_not_called()
+        self.assertEqual(len(cm.get_open_commitments()), 2)
+
+    def test_proof_check_failure_never_blocks_the_digest(self):
+        mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 6, 10, 18, 30))
+        state = {"pending_digest": [{"sender": "Rohan <r@x.com>", "subject": "Trip plans?",
+                                     "reason": "awaiting reply"}]}
+        with patch.object(mon, '_screen_new_mail', return_value=[]), \
+             patch.object(mon, '_close_proven', side_effect=RuntimeError("Gmail down")):
+            out = mon.check(state)
+        self.assertEqual(len(out), 1)
+        self.assertIn("Evening inbox digest", out[0].text)
 
     def test_evening_flush_sends_one_digest_then_stays_quiet(self):
         mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 6, 10, 18, 30))

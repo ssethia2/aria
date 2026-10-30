@@ -127,3 +127,63 @@
         db:
           items:
             - {match: maya, status: open, due_date: "{{annual:03-14}}"}
+
+- id: email-proof-of-completion
+  why: "The assessment miss: he said the assessment was done and pointed her at his email; she found only the newest thread (an interview invite), missed the test platform's 'thanks for taking' email, and asked whether to mark it done."
+  setup:
+    commitments:
+      - {description: "Acme coding assessment", kind: deadline, due_date: "{{today+1}}"}
+  tools:
+    read_email_thread: |
+      Matching threads for 'acme', newest first:
+      1. {{wd:today}} — Mike Chen <mchen@acme.com> — Acme Interview Availability Request (1 message)
+         Thanks for your interest in the Software Engineer role at Acme. We're excited to move forward with the interview process!
+      2. {{wd:today-1}} — Acme Hiring Team <tests@assess.example.com> — Thanks for taking the Acme Hiring Test (Java) (1 message)
+         Acme Hiring Test (Java) - Submission Confirmation. Hello, thanks for completing the Acme Hiring Test (Java).
+      3. {{wd:today-10}} — Acme Hiring Team <tests@assess.example.com> — Your Acme Hiring Test (Java) Invitation (1 message)
+         Thank you for your interest in joining Acme! Please complete the hiring test within 10 days.
+
+      Thread 1 in full, most recent messages first:
+
+      From: Mike Chen <mchen@acme.com>
+      Subject: Acme Interview Availability Request
+      Date: {{wd:today}}
+
+      Hi, thanks for your interest in the Software Engineer role at Acme. We're excited to move forward with the interview process! The next step is a 30 minute call with HR — please pick a time from the link below.
+  turns:
+    - user: "What's on my plate?"
+      expect:
+        called: [list_commitments]
+    - user: "Mate you have access to my email, you can see the Acme assessment was done right?"
+      expect:
+        called: [complete_commitment]
+        db:
+          items:
+            - {match: acme, status: done}
+        reply_not_matches:
+          - "(want|should) (me|i) (to )?mark"
+          - "still outstanding"
+        judge: >
+          Confirms the Acme assessment is done and marked off, and does not ask him to
+          confirm it. If she checked his email, she cites the right proof (the test
+          submission confirmation, or the interview invite as a next step) — never "I don't
+          see anything confirming it".
+
+- id: none-need-a-reply-drops-them
+  why: "After she listed the replies she was tracking, 'None of these need a reply' got 'Want me to drop all five, or just some?' — he'd already answered that."
+  setup:
+    commitments:
+      - {description: "Reply to Venmo: Sam requests $63.88", kind: reply_owed, due_date: "{{today-1}}"}
+      - {description: "Reply to Airbnb: reservation message", kind: reply_owed, due_date: "{{today-1}}"}
+      - {description: "Reply to Capital One: airline booking change", kind: reply_owed, due_date: "{{today-1}}"}
+  turns:
+    - user: "Which replies am I supposed to send?"
+      expect:
+        called: [list_commitments]
+    - user: "None of these need a reply…"
+      expect:
+        called_any: [drop_commitment, complete_commitment]
+        db: {open_count: 0}
+        reply_not_matches:
+          - "(want|should) (me|i) (to )?(drop|clear|remove|close)"
+          - "or just some"
