@@ -86,6 +86,13 @@ class TestDraftReply(unittest.TestCase):
                 'search_query': 'from:nobody', 'body': 'x'})
         self.assertIn("Couldn't find", msg)
 
+    def test_search_skips_arias_own_briefing(self):
+        service = self._service()
+        with patch.object(email_manager, 'get_gmail_service', return_value=service):
+            email_manager.draft_email_reply.invoke({'search_query': 'acme', 'body': 'x'})
+        q = service.users.return_value.messages.return_value.list.call_args.kwargs['q']
+        self.assertEqual(q, '(acme) -subject:"Daily Assistant Summary"')
+
 
 class TestAllowlistFailSafe(unittest.TestCase):
     def test_gcs_failure_falls_back_to_local_allowlist(self):
@@ -140,29 +147,59 @@ def _gmail_msg(sender, subject, text):
 
 
 class TestReadEmailThread(unittest.TestCase):
-    def _service(self, thread_messages):
+    def _service(self, threads, messages_by_thread):
+        """threads: the threads.list hits; messages_by_thread: thread id -> its messages."""
         svc = MagicMock()
-        users = svc.users.return_value
-        users.messages.return_value.list.return_value.execute.return_value = {'messages': [{'id': 'm1'}]}
-        users.messages.return_value.get.return_value.execute.return_value = {'threadId': 't1'}
-        users.threads.return_value.get.return_value.execute.return_value = {'messages': thread_messages}
+        api = svc.users.return_value.threads.return_value
+        api.list.return_value.execute.return_value = {'threads': threads}
+        api.get.side_effect = lambda **kw: MagicMock(
+            execute=MagicMock(return_value={'messages': messages_by_thread[kw['id']]}))
         return svc
 
-    def test_returns_thread_contents(self):
-        svc = self._service([_gmail_msg('Rohan <r@x.com>', 'Project X', 'We should book flights for July.')])
+    def _read(self, svc, query):
         with patch('email_backend.using_app_password', return_value=False), \
              patch.object(email_manager, 'get_gmail_service', return_value=svc):
-            out = email_manager.read_email_thread.invoke({'search_query': 'project x'})
+            return email_manager.read_email_thread.invoke({'search_query': query})
+
+    def test_returns_thread_contents(self):
+        svc = self._service([{'id': 't1', 'snippet': 'We should book'}], {'t1': [
+            _gmail_msg('Rohan <r@x.com>', 'Project X', 'We should book flights for July.')]})
+        out = self._read(svc, 'project x')
         self.assertIn('Rohan', out)
         self.assertIn('Project X', out)
         self.assertIn('book flights', out)
 
+    def test_lists_every_match_not_just_the_newest(self):
+        """The assessment miss: the search returned only the newest thread (an interview
+        invite), so she never saw the test platform's 'thanks for taking' email one result
+        down."""
+        svc = self._service(
+            [{'id': 't1', 'snippet': 'excited to move forward with the interview'},
+             {'id': 't2', 'snippet': 'Thanks for completing <b>Acme</b> Hiring Test'}],
+            {'t1': [_gmail_msg('Mike <m@acme.com>', 'Interview Availability Request', 'Pick a time.')],
+             't2': [_gmail_msg('Acme Hiring <tests@assess.example.com>',
+                               'Thanks for taking the Acme Hiring Test', 'Submission confirmed.')]})
+        out = self._read(svc, 'acme')
+        self.assertIn('1. ', out)
+        self.assertIn('2. ', out)
+        self.assertIn('Thanks for taking the Acme Hiring Test', out)
+        self.assertIn('Thanks for completing Acme Hiring Test', out)   # highlight tags stripped
+        self.assertIn('Pick a time.', out)                           # newest read in full
+        self.assertNotIn('Submission confirmed.', out)              # the rest: snippet only
+
+    def test_search_skips_arias_own_briefing_unless_its_the_only_match(self):
+        briefing = [{'id': 'b1', 'snippet': '#213 Acme coding assessment'}]
+        svc = self._service([], {'b1': [_gmail_msg('Me <me@x.com>', 'Your Daily Assistant Summary', 'x')]})
+        api = svc.users.return_value.threads.return_value
+        api.list.return_value.execute.side_effect = [{}, {'threads': briefing}]
+        out = self._read(svc, 'acme assessment')
+        queries = [c.kwargs['q'] for c in api.list.call_args_list]
+        self.assertEqual(queries, ['(acme assessment) -subject:"Daily Assistant Summary"',
+                                   'acme assessment'])
+        self.assertIn('Daily Assistant Summary', out)
+
     def test_not_found_does_not_claim_no_access(self):
-        svc = MagicMock()
-        svc.users.return_value.messages.return_value.list.return_value.execute.return_value = {'messages': []}
-        with patch('email_backend.using_app_password', return_value=False), \
-             patch.object(email_manager, 'get_gmail_service', return_value=svc):
-            out = email_manager.read_email_thread.invoke({'search_query': 'nope'})
+        out = self._read(self._service([], {}), 'nope')
         self.assertIn('no matching', out.lower())
         self.assertNotIn("can't access", out.lower())
 

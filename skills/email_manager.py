@@ -5,7 +5,9 @@ send_email (see docs/adr/0003), and run_email_summary (fetch + LLM-classify + la
 Other skills import get_gmail_service from here rather than re-authenticating.
 """
 import os
+import re
 import base64
+import html
 from email.message import EmailMessage
 from google.cloud import storage
 import google.auth.transport.requests
@@ -298,8 +300,7 @@ def draft_email_reply(search_query: str, body: str) -> str:
     if not service:
         return "Gmail isn't available right now."
 
-    found = service.users().messages().list(
-        userId='me', q=search_query, maxResults=1).execute().get('messages', [])
+    found = _search(service, 'messages', search_query, 1)
     if not found:
         return f"Couldn't find an email matching {search_query!r}."
 
@@ -351,22 +352,41 @@ def _body_text(payload) -> str:
     if any(p.strip() for p in plains):
         return "\n".join(plains).strip()
     if htmls:
-        import re
         return re.sub(r'<[^>]+>', ' ', "\n".join(htmls)).strip()
     return ""
 
 
+# Aria's own morning email (main.py) quotes every open commitment, so searching for any of
+# them found her briefing first. Searches skip it unless it's the only match.
+_OWN_BRIEFING = '-subject:"Daily Assistant Summary"'
+_THREADS_SHOWN = 5
+
+
+def _search(service, kind, query, n):
+    """Up to `n` Gmail `messages` or `threads` matching `query`, newest first, leaving out
+    Aria's own briefings unless nothing else matches."""
+    api = getattr(service.users(), kind)()
+    for q in (f'({query}) {_OWN_BRIEFING}', query):
+        found = api.list(userId='me', q=q, maxResults=n).execute().get(kind, [])
+        if found:
+            return found
+    return []
+
+
 @tool
 def read_email_thread(search_query: str) -> str:
-    """Read the contents of a SPECIFIC email thread the user asks about — search their
-    Gmail for it and return who it's from, the subject, and the message text, so you can
-    answer questions like "what's the project X thread about?" or "what did Rohan say".
-    READ-ONLY: nothing is sent, drafted, labeled, or deleted. Prefer this (not
-    `read_and_summarize_emails`) when the user asks about one particular thread, and never
+    """Search the user's Gmail and read what comes back: the top matching threads (newest
+    first, each with sender, subject, date and a snippet), then the newest one in full.
+    Use it for "what's the X email about?" / "what did Rohan say?", and to CHECK whether
+    something happened (a test taken, an application moving forward, a payment going
+    through) — the proof is often a different sender further down the list, like a test
+    platform's "thanks for taking" email or an interview invite. To read another match in
+    full, search again with its subject. READ-ONLY: nothing is sent, drafted, labeled, or
+    deleted. Prefer this (not `read_and_summarize_emails`) for specific emails, and never
     claim you can't access email — search for it.
 
     Args:
-        search_query: a Gmail search that finds the thread, in the user's words
+        search_query: a Gmail search, in the user's words
             (e.g. 'project x', 'from:rohan trip', 'subject:"apartment listings"').
     """
     import email_backend
@@ -375,34 +395,49 @@ def read_email_thread(search_query: str) -> str:
         matches = [e for e in email_backend.imap_fetch_recent(40)
                    if any(t in (e.get('subject', '') + e.get('sender', '') +
                                 e.get('snippet', '')).lower() for t in terms)]
+        matches = [e for e in matches
+                   if 'Daily Assistant Summary' not in e.get('subject', '')] or matches
         if not matches:
             return f"I searched your inbox for {search_query!r} but found nothing matching."
-        m = matches[0]
-        return (f"From: {m.get('sender', '?')}\nSubject: {m.get('subject', '?')}\n\n"
-                f"{m.get('snippet', '')}")
+        return "\n\n".join(f"From: {m.get('sender', '?')}\nSubject: {m.get('subject', '?')}\n\n"
+                           f"{m.get('snippet', '')}" for m in matches[:_THREADS_SHOWN])
 
     service = get_gmail_service()
     if not service:
         return "Gmail isn't available right now."
 
-    found = service.users().messages().list(
-        userId='me', q=search_query, maxResults=1).execute().get('messages', [])
-    if not found:
+    threads = _search(service, 'threads', search_query, _THREADS_SHOWN)
+    if not threads:
         return f"I searched your Gmail for {search_query!r} but found no matching email."
 
-    thread_id = service.users().messages().get(
-        userId='me', id=found[0]['id'], format='minimal').execute().get('threadId')
-    messages = service.users().threads().get(
-        userId='me', id=thread_id, format='full').execute().get('messages', [])
+    def headers(msg):
+        return {h['name']: h['value'] for h in msg['payload'].get('headers', [])}
+
+    listing, newest = [], []
+    for i, t in enumerate(threads):
+        fmt = {'format': 'full'} if i == 0 else {
+            'format': 'metadata', 'metadataHeaders': ['From', 'Subject', 'Date']}
+        msgs = service.users().threads().get(
+            userId='me', id=t['id'], **fmt).execute().get('messages', [])
+        if not msgs:
+            continue
+        if i == 0:
+            newest = msgs
+        h = headers(msgs[-1])
+        count = f"{len(msgs)} message{'s' if len(msgs) != 1 else ''}"
+        listing.append(f"{len(listing) + 1}. {h.get('Date', '?')} — {h.get('From', '?')} — "
+                       f"{h.get('Subject', '?')} ({count})\n"
+                       f"   {html.unescape(re.sub(r'</?b>', '', t.get('snippet', '')))}")
 
     parts = []
-    for msg in messages[-5:]:                       # last few messages in the thread
-        headers = {h['name']: h['value'] for h in msg['payload'].get('headers', [])}
+    for msg in newest[-5:]:                         # last few messages in the thread
+        h = headers(msg)
         text = " ".join(_body_text(msg['payload']).split())[:1500]
-        parts.append(f"From: {headers.get('From', '?')}\n"
-                     f"Subject: {headers.get('Subject', '?')}\n"
-                     f"Date: {headers.get('Date', '?')}\n\n{text}")
-    return (f"Found the thread (search: {search_query!r}), most recent messages:\n\n"
+        parts.append(f"From: {h.get('From', '?')}\n"
+                     f"Subject: {h.get('Subject', '?')}\n"
+                     f"Date: {h.get('Date', '?')}\n\n{text}")
+    return (f"Matching threads for {search_query!r}, newest first:\n" + "\n".join(listing)
+            + "\n\nThread 1 in full, most recent messages first:\n\n"
             + "\n\n--- earlier ---\n\n".join(reversed(parts)))
 
 
