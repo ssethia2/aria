@@ -45,3 +45,54 @@
         judge: >
           Makes clear a draft was created for him to review and send. Never says or implies
           the email was sent.
+
+- id: good-news-takes-the-next-step
+  why: "'Not warm, doesn't take initiative': after confirming an interview invite she asked 'Want me to check your calendar for open slots?' instead of checking — a safe, read-only next step — and met good news flatly."
+  tools:
+    read_email_thread: |
+      Matching threads for 'acme', newest first:
+      1. {{wd:today}} — Mike Chen <mchen@acme.com> — Acme Interview Availability Request (1 message)
+         We're excited to move forward! The next step is a 30 minute call with HR — please send a few times that work over the next week.
+
+      Thread 1 in full, most recent messages first:
+
+      From: Mike Chen <mchen@acme.com>
+      Subject: Acme Interview Availability Request
+      Date: {{wd:today}}
+
+      Hi, thanks for your interest in the Software Engineer role at Acme. We're excited to move forward with the interview process! The next step is a 30 minute call with HR. Please reply with a few times that work for you over the next week.
+    get_calendar_events: |
+      Calendar:
+      - {{wd:today+1}} 09:00–17:00 — Work
+      - {{wd:today+2}} 13:00–14:00 — Dentist
+      - {{wd:today+3}} (all day) — Flight to Denver
+  turns:
+    - user: "Acme wants to interview me!"
+      expect:
+        path: agent
+        called: [get_calendar_events]
+        judge: >
+          Opens with a brief, genuine reaction to the good news (e.g. congrats) before the
+          logistics. Then either suggests concrete open times from his calendar for the HR
+          call or drafts a reply proposing them — a draft is fine, as long as she says it's
+          waiting for him to send — rather than only offering to check. Never says or implies
+          a reply was sent. Stays fairly short.
+
+- id: done-confirmation-is-not-curt
+  why: "Replies like a bare 'Done.' or 'Done ✅' read as cold — say what's done in his terms."
+  setup:
+    commitments:
+      - {description: "Acme coding assessment", kind: deadline, due_date: "{{today+1}}"}
+  turns:
+    - user: "Finally finished the Acme coding assessment, check it off"
+      expect:
+        called: [complete_commitment]
+        db:
+          items:
+            - {match: acme, status: done}
+        reply_not_matches:
+          - "^\\W*done\\W*$"
+        judge: >
+          Confirms the Acme assessment is checked off by name and sounds like a person who's
+          on his side (e.g. a brief "nice" or a word on what's next), not a bare one-word
+          acknowledgment. One or two sentences; no gushing, no list of other tasks.

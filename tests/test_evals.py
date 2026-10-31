@@ -138,6 +138,18 @@ def _call(tool_name, **args):
     return {"tool": tool_name, "args": args, "turn": 0}
 
 
+class TestJudgeParse(unittest.TestCase):
+    def test_trailing_text_with_braces_is_ignored(self):
+        out = '{"pass": true, "reason": "warm and drafted times"}\nNote: {not json}'
+        self.assertEqual(H._first_json_object(out), {"pass": True, "reason": "warm and drafted times"})
+
+    def test_prose_before_the_object(self):
+        self.assertEqual(H._first_json_object('Verdict: {"pass": false, "reason": "x"}')["pass"], False)
+
+    def test_no_object(self):
+        self.assertEqual(H._first_json_object("no verdict"), {})
+
+
 class TestCheckTurn(unittest.TestCase):
     def check(self, expect, reply="", path="agent", calls=(), db=(), rules=()):
         return H.check_turn(expect, reply, path, list(calls), list(db), list(rules), TODAY)

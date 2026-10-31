@@ -264,11 +264,21 @@ def run_judge(rubric, why, history, user, calls, db, reply, tier="standard"):
         reply=reply, rubric=rubric)
     try:
         out = extract_text(get_llm(temperature=0, tier=tier).invoke(prompt).content)
-        m = re.search(r"\{.*\}", out, re.S)
-        verdict = json.loads(m.group(0)) if m else {}
+        verdict = _first_json_object(out)
         return bool(verdict.get("pass")), str(verdict.get("reason") or out[:200])
     except Exception as e:
         return False, f"judge unavailable ({type(e).__name__}: {str(e)[:120]})"
+
+
+def _first_json_object(text: str) -> dict:
+    """The first JSON object in the judge's reply. A greedy {.*} match also swallowed any
+    text after it that held a brace ("Extra data"), failing passing verdicts as
+    "judge unavailable"."""
+    start = text.find("{")
+    if start < 0:
+        return {}
+    obj = json.JSONDecoder().raw_decode(text[start:])[0]
+    return obj if isinstance(obj, dict) else {}
 
 
 # ---- running scenarios ---------------------------------------------------------------

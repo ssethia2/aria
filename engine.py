@@ -490,8 +490,11 @@ An item with times_rescheduled >= 3 has been pushed repeatedly — if you mentio
 frank and useful: offer to either pick a REAL date or drop it, rather than nudging the
 same way a fourth time.
 
-If a nudge IS warranted, write ONE short, warm message as Aria in first person — natural
-and specific, zero nagging tone. Fold multiple items into that one message.
+If a nudge IS warranted, write ONE short message as Aria in first person, the way a friend
+who has his back would text: lead with the one thing that matters most and why now, and
+offer one concrete thing you can do about it (block time on his calendar, draft the reply,
+pick a real date). Mention at most two other items, briefly. No stock greeting, no "on my
+radar", nothing that reads like a status report — and zero nagging tone.
 
 Today: {today}
 Open commitments (JSON):
@@ -520,6 +523,13 @@ Return ONLY raw JSON (no markdown):
             return []
 
         nudged = state.get("nudged", {})
+        # "Never re-nudge within 3 days" was the model's call, and it nudged him about the
+        # same assessment nine days running. Enforced here; only the due day earns a repeat.
+        recent = (now - timedelta(days=3)).strftime('%Y-%m-%d')
+        open_ = [c for c in open_ if not (nudged.get(str(c["id"]), "") > recent
+                                          and c.get("due_date") != today)]
+        if not open_:
+            return []
         slips = slip_counts([c["id"] for c in open_])
         for c in open_:
             c["last_nudged"] = nudged.get(str(c["id"]))

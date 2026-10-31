@@ -197,6 +197,39 @@ class TestChaseSnooze(TempStateMixin, unittest.TestCase):
         self.assertEqual(out, [])
         llm.invoke.assert_not_called()      # nothing left to judge → no LLM call at all
 
+    def test_recently_nudged_items_wait_three_days_unless_due_today(self):
+        """It nudged him about the same assessment nine days running."""
+        def item(cid, due):
+            return {"id": cid, "description": f"item {cid}", "who": None, "kind": "deadline",
+                    "due_date": due, "due_time": None, "recurring": None, "status": "open",
+                    "source": "chat", "created_at": "2026-10-01 10:00:00", "snoozed_until": None}
+        items = [item(1, "2026-10-31"), item(2, "2026-10-30"), item(3, "2026-11-05")]
+        state = {"nudged": {"1": "2026-10-29", "2": "2026-10-29", "3": "2026-10-27"}}
+        mon = ChaseMonitor(now_fn=lambda: datetime(2026, 10, 30, 12, 0))
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content='{"send": false}')
+        with patch("skills.commitment_manager.get_open_commitments", return_value=items), \
+             patch("skills.commitment_manager.slip_counts", return_value={}), \
+             patch.object(engine, "_get_llm", return_value=llm):
+            mon.check(state)
+        offered = llm.invoke.call_args[0][0]
+        self.assertNotIn('"item 1"', offered)    # nudged yesterday, due tomorrow → waits
+        self.assertIn('"item 2"', offered)       # nudged yesterday, but due TODAY
+        self.assertIn('"item 3"', offered)       # last nudged 3 days ago → fair game
+
+    def test_nothing_offered_means_no_llm_call(self):
+        items = [{"id": 1, "description": "item 1", "who": None, "kind": "deadline",
+                  "due_date": "2026-11-05", "due_time": None, "recurring": None,
+                  "status": "open", "source": "chat", "created_at": "2026-10-01 10:00:00",
+                  "snoozed_until": None}]
+        mon = ChaseMonitor(now_fn=lambda: datetime(2026, 10, 30, 12, 0))
+        llm = MagicMock()
+        with patch("skills.commitment_manager.get_open_commitments", return_value=items), \
+             patch("skills.commitment_manager.slip_counts", return_value={}), \
+             patch.object(engine, "_get_llm", return_value=llm):
+            self.assertEqual(mon.check({"nudged": {"1": "2026-10-29"}}), [])
+        llm.invoke.assert_not_called()
+
 
 class TestNetflixQuiet(unittest.TestCase):
     def _run(self, result):
