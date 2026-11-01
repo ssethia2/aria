@@ -159,9 +159,9 @@ class CommitmentMonitor(Monitor):
 
 
 class EmailDigestMonitor(Monitor):
-    """Screens new inbox mail but NEVER pings instantly: flagged items accumulate and
-    go out as ONE evening digest (~18:00). Emails that need a reply also become
-    reply_owed commitments, so the chase loop owns them.
+    """Screens new inbox mail: flagged items accumulate and go out as ONE evening digest
+    (~18:00) — no instant pings unless one of his standing rules asks for it. Emails that
+    need a reply also become reply_owed commitments, so the chase loop owns them.
 
     (Design per the 2026-06 needs interview: <5 decision-emails/day — instant pings
     were noise; a digest plus tracked replies-owed is the right weight.)
@@ -169,29 +169,40 @@ class EmailDigestMonitor(Monitor):
 
     SCREEN_PROMPT = """You are screening a user's incoming email for a twice-daily digest.
 
+His standing rules — follow them; they override the defaults below:
+{rules}
+
 FLAG (worth surfacing) anything time-sensitive, personally significant, or actionable:
 a real correspondent, bills due, security alerts, travel/booking changes, or a reply
 that may be owed on the user's OWN booking/order/thread (e.g. an Airbnb host or a vendor
 following up on something the user started). When in doubt, flag it — surfacing is cheap.
 Do NOT flag newsletters, promotions, receipts, or social notifications.
 
-needs_reply = TRUE only when the user genuinely OWES a reply to keep something of THEIRS
-moving — a person or counterparty (friend, colleague, a host/vendor on the user's own
-booking or order) is waiting on the user's answer, confirmation, or decision.
-needs_reply = FALSE for solicitations the user can simply ignore — cold outreach,
-recruiting, focus-group / survey / study invitations, sales, "would you be interested",
-events the user didn't initiate — EVEN when phrased as a question from a real person.
-needs_reply = FALSE for ALL automated notices — bank/card alerts and rate-change notices,
-booking/order confirmations, email-validation or verify-your-account messages, shipping
-updates, platform notifications. A machine sent them; no human is waiting on a reply.
+needs_reply = TRUE only when a person is waiting on HIS answer to keep something of HIS
+moving: a friend or family member, someone he's planning something with, or a person or
+business answering an inquiry HE started (a venue, a service, a company in a process he
+began).
+needs_reply = FALSE for:
+- solicitations he can ignore: cold outreach, recruiters and agencies (including their
+  follow-ups and "bumps" on a thread he never answered), focus groups, surveys, sales,
+  events he didn't initiate — EVEN when phrased as a question from a real person;
+- automated notices: bank/card alerts, booking or order confirmations and changes,
+  verify-your-account, shipping, e-signature requests, forms to fill out, platform
+  notifications — a machine sent them; no human is waiting on a reply;
+- messages relayed through a platform (Airbnb, Expedia, a booking or building portal) —
+  he answers those in the app, not by email;
+- calendar invitations (he RSVPs in the calendar) and payment requests (he pays in the app).
 If you're unsure, set needs_reply = false but still flag it with a reason noting it MIGHT
 warrant a reply, so the user can judge.
+
+alert_now = TRUE only when one of his standing rules says to alert him immediately about
+this kind of email.
 
 Emails (JSON):
 {emails}
 
 Return ONLY a raw JSON array (no markdown), one object per flagged email:
-[{{"id": "<email id>", "reason": "<one short sentence; say if it may need a reply>", "needs_reply": true/false}}]
+[{{"id": "<email id>", "reason": "<one short sentence; say if it may need a reply>", "needs_reply": true/false, "alert_now": true/false}}]
 Return [] if nothing qualifies — that should be the common case."""
 
     DIGEST_HOUR = 18  # evening flush; the 08:00 briefing covers the morning side
@@ -255,7 +266,10 @@ Return [] if none — that should be the common case."""
         except Exception as e:  # never let the proof check block the digest
             print(f"[engine] email-digest: proof check failed: {e}")
             closed = []
-        return closed + self._maybe_flush_digest(state)
+        alerts = [Notification(f"📩 {a['sender']} — “{a['subject']}”: {a['reason']}"
+                               + (f" (tracking reply as {a['tracked']})" if a.get("tracked") else ""))
+                  for a in state.pop("alerts", [])]
+        return alerts + closed + self._maybe_flush_digest(state)
 
     def _new_sent_mail(self, state: dict, since: float) -> list:
         """Mail the user sent since the last tick ("I just completed the assessment" is
@@ -389,8 +403,12 @@ Return [] if none — that should be the common case."""
             return []
 
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
-        response = _get_llm().invoke(
-            self.SCREEN_PROMPT.format(emails=json.dumps(emails, indent=2)))
+        # His standing rules ("never track apartment emails as replies owed", "alert me right
+        # away about interview invites") used to reach only the chat agent, so the screener
+        # kept doing exactly what he'd told Aria not to.
+        from instructions import render_for_prompt
+        response = _get_llm().invoke(self.SCREEN_PROMPT.format(
+            rules=render_for_prompt() or "(none)", emails=json.dumps(emails, indent=2)))
         content = response.content
         if isinstance(content, list):
             content = next((b['text'] for b in content
@@ -413,8 +431,9 @@ Return [] if none — that should be the common case."""
             # Deterministic guard: you can't OWE a reply to a no-reply/automated sender
             # (bank notices, booking confirmations, validation emails) no matter what the
             # screening LLM said. Still flagged in the digest — just never tracked.
-            from email_filter import is_noreply_sender
-            if item.get('needs_reply') and is_noreply_sender(email['sender']):
+            from email_filter import is_noreply_sender, is_never_a_reply
+            if item.get('needs_reply') and (is_noreply_sender(email['sender'])
+                                            or is_never_a_reply(email['subject'])):
                 item['needs_reply'] = False
             if item.get('needs_reply') and email['id'] not in converted:
                 sender_name = email['sender'].split('<')[0].strip(' "') or email['sender']
@@ -442,7 +461,10 @@ Return [] if none — that should be the common case."""
                 else:
                     entry["tracked"] = "(you already owe a reply on this thread)"
                 converted.append(email['id'])
-            state.setdefault("pending_digest", []).append(entry)
+            # A standing rule can ask for an immediate ping ("alert me right away about
+            # interview invites") — that one goes out this tick instead of in the digest.
+            queue = "alerts" if item.get('alert_now') else "pending_digest"
+            state.setdefault(queue, []).append(entry)
         state["reply_commitment_ids"] = converted[-300:]
         return emails
 

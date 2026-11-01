@@ -31,3 +31,18 @@ def is_noreply_sender(from_header: str) -> bool:
     Used only to gate reply_owed tracking, never digest screening (see module docstring:
     important transactional mail legitimately uses these addresses)."""
     return bool(_NOREPLY_RE.search(from_header or ""))
+
+
+_INVITE_RE = re.compile(
+    r"^\s*(?:(?:updated|new)\s+)?invitation(?:\s+from an unknown sender)?\s*:|"
+    r"^\s*(?:accepted|declined|tentatively accepted)\s*:", re.IGNORECASE)
+_PAYMENT_REQUEST_RE = re.compile(r"\brequests?\s+\$\s?\d", re.IGNORECASE)
+
+
+def is_never_a_reply(subject: str) -> bool:
+    """Mail whose answer is never an email: calendar invites (he RSVPs in the calendar) and
+    payment requests like "Sam requests $36.00" (he pays or declines in the app). In Aria's
+    whole history none of these got an email reply — every one was dropped by hand.
+    Still worth flagging in the digest; just never a tracked reply."""
+    subject = subject or ""
+    return bool(_INVITE_RE.search(subject) or _PAYMENT_REQUEST_RE.search(subject))

@@ -348,8 +348,13 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         os.unlink(self._db)
         self._db_patch = patch.object(cm, 'DB_PATH', self._db)
         self._db_patch.start()
+        import instructions                              # never his real standing rules
+        self._rules = os.path.join(tempfile.mkdtemp(), "instructions.json")
+        self._rules_patch = patch.object(instructions, 'INSTRUCTIONS_PATH', self._rules)
+        self._rules_patch.start()
 
     def tearDown(self):
+        self._rules_patch.stop()
         self._db_patch.stop()
         if os.path.exists(self._db):
             os.unlink(self._db)
@@ -471,6 +476,50 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
              patch('email_backend.using_app_password', return_value=False):
             mon.check({})
         llm.invoke.assert_not_called()             # bulk mail never reached the LLM
+
+    # --- what counts as a reply owed ---
+
+    def _screen_one(self, subject, sender, verdict, rules=None):
+        import json as _json
+        if rules is not None:
+            with open(self._rules, "w") as f:
+                _json.dump([{"id": i + 1, "instruction": r} for i, r in enumerate(rules)], f)
+        service = self._mail(inbox=[('m1', subject, sender, '...')])
+        llm = MagicMock()
+        llm.invoke.side_effect = [MagicMock(content=verdict), MagicMock(content='[]')]
+        mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 10, 30, 12, 0))
+        state = {}
+        with patch('skills.email_manager.get_gmail_service', return_value=service), \
+             patch.object(engine, '_get_llm', return_value=llm), \
+             patch('email_backend.using_app_password', return_value=False), \
+             patch('skills.commitment_manager.add', return_value=9) as add:
+            out = mon.check(state)
+        return out, state, add, llm.invoke.call_args_list[0][0][0]
+
+    def test_calendar_invites_and_payment_requests_are_never_replies_owed(self):
+        """Every one of these in Aria's history was dropped by hand."""
+        for subject, sender in [("Invitation: Sam / Jo @ Tue Nov 10, 2026 1pm", "Jo <jo@acme.com>"),
+                                ("Sam requests $36.00", "Venmo <venmo@venmo.com>")]:
+            out, state, add, _ = self._screen_one(
+                subject, sender, '[{"id": "m1", "reason": "r", "needs_reply": true}]')
+            add.assert_not_called()
+            self.assertEqual(len(state["pending_digest"]), 1)   # still surfaced in the digest
+
+    def test_screener_sees_his_standing_rules(self):
+        _, _, _, prompt = self._screen_one(
+            "Re: 12 Oak St inquiry", "Agent <a@realty.com>", '[]',
+            rules=["Never track apartment emails as reply-owed commitments."])
+        self.assertIn("Never track apartment emails as reply-owed commitments.", prompt)
+
+    def test_rule_asked_alert_goes_out_now_not_in_the_digest(self):
+        """'Alert me right away about interview invites' was saved, then never honored."""
+        out, state, _, _ = self._screen_one(
+            "Acme Interview Request", "Mike <mike@acme.com>",
+            '[{"id": "m1", "reason": "interview invite", "needs_reply": false, "alert_now": true}]',
+            rules=["Alert immediately when an interview invite arrives."])
+        self.assertEqual(len(out), 1)
+        self.assertIn("Acme Interview Request", out[0].text)
+        self.assertNotIn("pending_digest", state)
 
     # --- closing commitments that email proves done ---
 

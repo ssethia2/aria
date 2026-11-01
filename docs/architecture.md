@@ -53,7 +53,7 @@ A daemon thread inside the bot runs pluggable `Monitor`s, each on its own interv
 | Monitor | What it does |
 |---|---|
 | `CommitmentMonitor` | Pings timed/recurring commitments at their moment; advances recurrences |
-| `EmailDigestMonitor` | Deterministic bulk pre-filter → LLM-screens the rest → one evening digest; replies-owed become commitments. Also closes deadline/promise commitments that new mail (inbound, or his own sent mail) proves done, and says so — only when the email contains a word unique to that commitment, so a proof can't land on the wrong item |
+| `EmailDigestMonitor` | Deterministic bulk pre-filter → LLM-screens the rest (with his standing rules) → one evening digest, or an immediate ping when a rule asks for one; replies-owed become commitments (never calendar invites, payment requests or no-reply senders). Also closes deadline/promise commitments that new mail (inbound, or his own sent mail) proves done, and says so — only when the email contains a word unique to that commitment, so a proof can't land on the wrong item |
 | `ChaseMonitor` | Daytime LLM judgment over open commitments → at most one warm nudge/day |
 | `InsightMonitor` | Twice-daily cross-source synthesis (calendar + commitments + weather) → one non-obvious insight, or silence |
 | `HealthMonitor` | Re-runs the self-diagnosis; alerts when something turns FAIL |
