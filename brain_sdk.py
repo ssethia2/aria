@@ -230,10 +230,16 @@ class SubscriptionBrain:
             system_prompt=self._system_prompt(),
             mcp_servers={"aria": self._server},
             allowed_tools=[f"mcp__aria__{n}" for n in self._tool_names],
-            # Claude Code's own tools OFF — Aria's toolset stays exactly Aria's.
-            disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep",
-                              "WebFetch", "WebSearch", "NotebookEdit", "Task",
-                              "TodoWrite", "KillShell", "BashOutput"],
+            # Aria's toolset stays exactly Aria's. A name blocklist missed 17 newer Claude Code
+            # tools (CronCreate, PushNotification, SendMessage, Skill, Workflow…) plus the
+            # claude.ai connectors and a skill listing — ~28K extra input tokens on every
+            # turn (47.6K → 19.3K on a one-word probe). So: no built-in tools at all, only
+            # the aria MCP server, no user/project settings, no skills.
+            tools=[],
+            disallowed_tools=["EndConversation"],
+            strict_mcp_config=True,
+            setting_sources=[],
+            skills=[],
             permission_mode="bypassPermissions",   # unattended tool runs (same as LangGraph)
             model=MODEL,
             max_turns=MAX_TURNS,
@@ -277,6 +283,7 @@ class SubscriptionBrain:
                       f"\n{gap}</missed_context>\n\n{prompt}")
 
         result = {"reply": None, "session_id": session}
+        texts = []
 
         async def go():
             opts = self._options(resume=session)
@@ -292,7 +299,11 @@ class SubscriptionBrain:
                 elif t == "AssistantMessage":
                     for b in msg.content:
                         if hasattr(b, "text") and getattr(b, "text", "").strip():
-                            result["reply"] = b.text
+                            # Every text block, in order. Keeping only the last one dropped
+                            # "Marked it done" when she went on to check something and wrote
+                            # "Also — Acme wants an interview" after the tool call.
+                            texts.append(b.text.strip())
+                            result["reply"] = "\n\n".join(texts)
                         name = getattr(b, "name", None)
                         if name and on_tool:
                             on_tool(name.replace("mcp__aria__", ""))

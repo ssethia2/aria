@@ -129,6 +129,19 @@ class TestBridging(unittest.TestCase):
             self.assertEqual(os.environ["ANTHROPIC_API_KEY"], "sk-ant-secret")  # restored
 
 
+class TestToolSurface(unittest.TestCase):
+    def test_session_gets_only_arias_tools(self):
+        """A name blocklist let 17 newer Claude Code tools (CronCreate, PushNotification,
+        SendMessage, Skill…) and the claude.ai connectors into her sessions."""
+        opts = SubscriptionBrain(tools=[fake_weather])._options()
+        self.assertEqual(opts.tools, [])                  # no built-in Claude Code tools
+        self.assertTrue(opts.strict_mcp_config)           # no claude.ai / user MCP servers
+        self.assertEqual(list(opts.mcp_servers), ["aria"])
+        self.assertEqual(opts.setting_sources, [])        # no user/project settings or hooks
+        self.assertEqual(opts.skills, [])
+        self.assertEqual(opts.allowed_tools, ["mcp__aria__fake_weather"])
+
+
 class TestRuntimeFallback(TempState):
     """Subscription rate limit / failure mid-flight -> the turn serves from the API agent."""
 
@@ -347,6 +360,29 @@ class TestDatesAndDailySessions(TempState):
 
     def _state(self, thread):
         return json.loads(brain_sdk.STATE_PATH.read_text())["threads"][thread]
+
+    def test_reply_keeps_text_from_before_and_after_a_tool_call(self):
+        b = _brain()
+        tool_use = type("B", (), {"name": "mcp__aria__read_email_thread"})()
+
+        def fake_query(prompt=None, options=None):
+            async def gen():
+                first = AssistantMessage("Marked the Acme assessment done.")
+                first.content.append(tool_use)
+                yield first
+                yield AssistantMessage("Also — Acme wants an interview.")
+                yield ResultMessage("sess-1")
+            return gen()
+
+        def fake_anyio_run(fn):
+            import asyncio
+            asyncio.run(fn())
+
+        with patch("claude_agent_sdk.query", fake_query), \
+             patch.object(brain_sdk.anyio, "run", fake_anyio_run), \
+             patch.object(SubscriptionBrain, "_record_usage"):
+            reply = b._run_turn("multi", "you can see it was done right?")
+        self.assertEqual(reply, "Marked the Acme assessment done.\n\nAlso — Acme wants an interview.")
 
     def test_stamp_format(self):
         self.assertEqual(brain_sdk.stamp(datetime(2026, 10, 16, 17, 5)), "[Fri 2026-10-16 5:05 PM]")
