@@ -419,6 +419,39 @@ class TestDatesAndDailySessions(TempState):
         self.assertEqual(seen["resume"], "today-s")
         self.assertNotIn("<recent_conversation>", seen["prompt"])
 
+    def test_engine_message_reaches_a_resumed_session(self):
+        # Live: a heads-up went out, he answered "That's okay", and the resumed session —
+        # which never saw the heads-up — replied "Got it. Anything else?"
+        self._seed("t", session_id="today-s", session_day=date.today().isoformat(),
+                   messages=[{"type": "human", "content": "hi"}])
+        b = _brain()
+        b.update_state({"configurable": {"thread_id": "t"}},
+                       {"messages": [AIMessage(content="💡 Sam's birthday is tomorrow — want a draft?")]})
+        seen = self._turn(b, "t", "yes please")
+        self.assertEqual(seen["resume"], "today-s")
+        self.assertIn("<sent_since_your_last_turn>", seen["prompt"])
+        self.assertIn("Sam's birthday is tomorrow", seen["prompt"])
+        self.assertTrue(seen["prompt"].endswith("</sent_since_your_last_turn>\n\nyes please"))
+        self.assertEqual(self._state("t")["notes"], [])            # carried once, then cleared
+        self.assertNotIn("<sent_since", self._turn(b, "t", "thanks")["prompt"])
+
+    def test_new_session_sees_engine_messages_through_the_bridge_only(self):
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        self._seed("t", session_id="old", session_day=yesterday,
+                   messages=[{"type": "human", "content": "hi"}])
+        b = _brain()
+        b.update_state({"configurable": {"thread_id": "t"}},
+                       {"messages": [AIMessage(content="⏰ Call Sam")]})
+        seen = self._turn(b, "t", "done")
+        self.assertIn("Aria: ⏰ Call Sam", seen["prompt"])
+        self.assertNotIn("<sent_since", seen["prompt"])
+        self.assertEqual(self._state("t")["notes"], [])
+
+    def test_a_fallback_exchange_is_not_an_engine_note(self):
+        _brain().update_state({"configurable": {"thread_id": "t"}}, {"messages": [
+            HumanMessage(content="hi"), AIMessage(content="hello")]})
+        self.assertNotIn("notes", self._state("t"))
+
     def test_mirror_entries_are_timestamped(self):
         self._turn(_brain(), "t", "hello")
         for m in self._state("t")["messages"]:

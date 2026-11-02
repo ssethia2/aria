@@ -260,7 +260,7 @@ class TestRuleRedundancy(unittest.TestCase):
     def test_novel_rule_is_not_redundant(self):
         existing = "Pack blankets for Maine trips."
         self.assertFalse(engine._rule_redundant(
-            "Send Diane a status update every Friday afternoon.", existing))
+            "Send Kim a status update every Friday afternoon.", existing))
 
     def test_paraphrase_of_prior_proposal_is_redundant(self):
         # The actual repeat: the same trip-prep rule proposed 3x in different wording.
@@ -282,7 +282,7 @@ class TestNoreplyFilter(unittest.TestCase):
 
     def test_humans_pass(self):
         from email_filter import is_noreply_sender
-        for f in ("Diane <diane@company.com>", "Rohan <rohan@x.com>",
+        for f in ("Kim <kim@company.com>", "Rohan <rohan@x.com>",
                   "Ashley Mareira <ash@gmail.com>"):
             self.assertFalse(is_noreply_sender(f), f)
 
@@ -433,11 +433,11 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         llm = MagicMock(); llm.invoke.return_value = MagicMock(content=flagged)
         mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 6, 13, 12, 0))
 
-        existing = {'id': 7, 'description': 'Reply to Diane: Project X', 'created_at': '2026-06-11 09:00:00'}
+        existing = {'id': 7, 'description': 'Reply to Kim: Launch plan', 'created_at': '2026-06-11 09:00:00'}
 
         # Case A: prior reply-owed still UNanswered → no new commitment
         with patch('skills.email_manager.get_gmail_service',
-                   return_value=service_one_email('Re: Project X', 'Diane <d@x.com>')), \
+                   return_value=service_one_email('Re: Launch plan', 'Kim <d@x.com>')), \
              patch.object(engine, '_get_llm', return_value=llm), \
              patch('email_backend.using_app_password', return_value=False), \
              patch.object(cm, 'open_reply_owed_for', return_value=existing), \
@@ -448,7 +448,7 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
 
         # Case B: user already replied to the prior one → close it, open the new one
         with patch('skills.email_manager.get_gmail_service',
-                   return_value=service_one_email('Re: Project X', 'Diane <d@x.com>')), \
+                   return_value=service_one_email('Re: Launch plan', 'Kim <d@x.com>')), \
              patch.object(engine, '_get_llm', return_value=llm), \
              patch('email_backend.using_app_password', return_value=False), \
              patch.object(cm, 'open_reply_owed_for', return_value=existing), \
@@ -869,7 +869,7 @@ class TestWeeklyReflectionMonitor(unittest.TestCase):
         from engine import WeeklyReflectionMonitor
         mon = WeeklyReflectionMonitor(now_fn=self._sunday_eve)
         with patch.object(WeeklyReflectionMonitor, '_signal',
-                          return_value="COMMITMENT PATTERNS:\n- replies to Diane keep slipping"), \
+                          return_value="COMMITMENT PATTERNS:\n- replies to Kim keep slipping"), \
              patch('instructions.render_for_prompt', return_value=""), \
              self._llm('{"note": "your replies keep slipping midweek", "rule": "Chase reply-owed items after 2 days."}'):
             notes = mon.check({})
@@ -896,3 +896,129 @@ class TestWeeklyReflectionMonitor(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestMomentMonitor(TempStateMixin, unittest.TestCase):
+    """Heads-ups around calendar moments: legwork first, judged once, never a wrong link."""
+
+    def setUp(self):
+        super().setUp()
+        from zoneinfo import ZoneInfo
+        import moments
+        self.tz = ZoneInfo("Asia/Dubai")
+        self.start = datetime(2026, 11, 5, 21, 0, tzinfo=self.tz)
+        self.moment = moments.Moment(
+            key="ev1@x", kind="meeting", title="Interview with Acme", start=self.start,
+            end=self.start.replace(minute=30), people=[{"name": "Kim", "email": "kim@acme.com"}],
+            location="https://acme.zoom.us/j/111")
+        self.found = {"email": "Kim: we'll cover your resume", "commitments": [], "people": []}
+
+    def _run(self, verdict, at=None, found=None, state=None):
+        import moments
+        mon = engine.MomentMonitor(now_fn=lambda: at or self.start.replace(hour=20, minute=5))
+        llm = MagicMock()
+        if isinstance(verdict, Exception):
+            llm.invoke.side_effect = verdict
+        else:
+            llm.invoke.return_value = MagicMock(content=verdict)
+        state = {} if state is None else state
+        with patch.object(moments, "upcoming", return_value=[self.moment]), \
+             patch.object(moments, "my_name", return_value="Sam"), \
+             patch.object(moments, "gather", return_value=found or self.found), \
+             patch.object(engine, "_get_llm", return_value=llm), \
+             patch("instructions.render_for_prompt", return_value="  3. Never mention the Acme offer"):
+            out = mon.check(state)
+        return out, llm, state
+
+    def test_heads_up_is_a_nudge_and_fires_once(self):
+        verdict = '{"why": "resume focus", "send": true, "message": "Acme in 1h — they\'ll cover your resume."}'
+        out, llm, state = self._run(verdict)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].kind, "nudge")
+        self.assertTrue(out[0].text.startswith("📅 Acme in 1h"))
+        prompt = llm.invoke.call_args[0][0]
+        self.assertIn("Never mention the Acme offer", prompt)          # standing rules bind it
+        self.assertIn("source of truth", prompt)
+        again, llm2, _ = self._run(verdict, state=state)
+        self.assertEqual(again, [])
+        llm2.invoke.assert_not_called()
+
+    def test_silence_is_remembered_too(self):
+        out, _, state = self._run('{"why": "nothing new", "send": false, "message": ""}')
+        self.assertEqual(out, [])
+        self.assertIn("ev1@x:before", state["done"])
+
+    def test_nothing_to_add_skips_the_model(self):
+        self.moment.people = []
+        out, llm, state = self._run('{"send": true, "message": "x"}',
+                                    found={"email": "", "commitments": [], "people": []})
+        self.assertEqual(out, [])
+        llm.invoke.assert_not_called()
+        self.assertIn("ev1@x:before", state["done"])
+
+    def test_a_made_up_join_link_drops_the_message(self):
+        out, _, state = self._run('{"send": true, "message": "Use https://acme.zoom.us/j/999"}')
+        self.assertEqual(out, [])
+        self.assertIn("ev1@x:before", state["done"])
+
+    def test_model_failure_retries_then_gives_up(self):
+        state = {}
+        for _ in range(2):
+            out, _, state = self._run(RuntimeError("overloaded"), state=state)
+            self.assertEqual(out, [])
+            self.assertNotIn("ev1@x:before", state["done"])
+        self._run(RuntimeError("overloaded"), state=state)
+        self.assertIn("ev1@x:before", state["done"])
+
+    def test_outside_the_window_nothing_happens(self):
+        out, llm, _ = self._run('{"send": true, "message": "x"}',
+                                at=self.start.replace(hour=12))
+        self.assertEqual(out, [])
+        llm.invoke.assert_not_called()
+
+
+class TestSharedGate(TempStateMixin, unittest.TestCase):
+    """One budget and one memory of what was said, across every monitor."""
+
+    def test_judgment_pings_share_a_daily_budget(self):
+        nudges = [Notification(f"idea {i}", kind="nudge") for i in range(engine.NUDGE_BUDGET + 2)]
+        reports = [Notification("⏰ Call Sam"), Notification("📬 Evening digest")]
+        sent = []
+        eng = ProactiveEngine([StubMonitor(nudges + reports)],
+                              notify_fn=lambda t: sent.append(t) or True)
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 12, 0))
+        self.assertEqual(sum(t.startswith("idea") for t in sent), engine.NUDGE_BUDGET)
+        self.assertIn("⏰ Call Sam", sent)                     # reports always go through
+        self.assertIn("📬 Evening digest", sent)
+
+    def test_budget_resets_the_next_day(self):
+        sent = []
+        mon = StubMonitor([Notification("idea", kind="nudge")] * engine.NUDGE_BUDGET, interval_seconds=1)
+        eng = ProactiveEngine([mon], notify_fn=lambda t: sent.append(t) or True)
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 12, 0))
+        eng.tick(now_monotonic=10, now=datetime(2026, 6, 10, 13, 0))
+        self.assertEqual(len(sent), engine.NUDGE_BUDGET)
+        eng.tick(now_monotonic=20, now=datetime(2026, 6, 11, 12, 0))
+        self.assertEqual(len(sent), 2 * engine.NUDGE_BUDGET)
+
+    def test_every_judge_sees_what_was_already_said(self):
+        eng = ProactiveEngine([StubMonitor([Notification("📅 Acme in 1h, link on the invite")])],
+                              notify_fn=lambda t: True)
+        eng.tick(now_monotonic=0, now=datetime.now())
+        with patch("instructions.render_for_prompt", return_value="  1. Be brief"):
+            rules, told = engine.judgment_context()
+        self.assertIn("Be brief", rules)
+        self.assertIn("Acme in 1h", told)
+
+    def test_chase_reads_rules_and_the_told_log(self):
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content='{"send": false, "message": "", "commitment_ids": []}')
+        open_ = [{"id": 3, "description": "Reply to Kim", "kind": "reply_owed", "due_date": None}]
+        with patch('skills.commitment_manager.get_open_commitments', return_value=open_), \
+             patch('skills.commitment_manager.slip_counts', return_value={}), \
+             patch.object(engine, '_get_llm', return_value=llm), \
+             patch.object(engine, 'judgment_context', return_value=("  2. No Acme talk", "- told: hi")):
+            ChaseMonitor(now_fn=lambda: datetime(2026, 6, 10, 14, 0)).check({})
+        prompt = llm.invoke.call_args[0][0]
+        self.assertIn("No Acme talk", prompt)
+        self.assertIn("- told: hi", prompt)

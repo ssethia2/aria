@@ -5,12 +5,21 @@ A background loop of pluggable Monitors, each polled on its own interval:
                         surface in the briefing/digest instead — no random pings)
   - EmailDigestMonitor: LLM-screens new mail; flagged items accumulate into ONE
                         evening digest, and replies-owed become tracked commitments
+  - MomentMonitor:      looks AHEAD — around each meeting, flight and reservation on his
+                        calendar (moments.py) it does the legwork (the thread with the
+                        people involved, what he owes them, the time in his timezone)
+                        and speaks only if that adds to Google's own reminder
   - ChaseMonitor:       daytime judgment nudges on aging/overdue commitments
   - InsightMonitor:     twice-daily cross-source intelligence — looks at calendar +
                         commitments + weather together and surfaces one non-obvious,
                         useful thing (or stays silent, the default)
   - NetflixMonitor:     spots a fresh "Update Netflix Household" email, runs the
                         browser automation immediately, reports the outcome
+
+One gate for everything said on her own initiative: judgment pings (kind="nudge" — chase,
+insight, moments) share a daily budget, and every judge reads the same standing rules and
+the same log of what she's already told him, so a rule binds every monitor and none
+repeats another. Reports (reminders he set, digests, results) always go through.
 
 Quiet hours (23:00–08:00 by default): monitors still RUN and act, but notifications
 queue and flush as one "while you were away" digest in the morning. Notifications
@@ -70,6 +79,49 @@ def save_state(state: dict):
 class Notification:
     text: str
     urgent: bool = False  # urgent notifications bypass quiet hours
+    # 'nudge' = Aria speaking up on her own judgment (chase, insight, moments); these share
+    # one daily budget. Everything else ('report': reminders he set, digests, results of
+    # what she did, alerts a standing rule asked for) always goes through.
+    kind: str = "report"
+
+
+NUDGE_BUDGET = 6        # judgment pings per day, across every monitor
+TOLD_WINDOW = timedelta(hours=48)
+
+
+def _remember_told(state: dict, text: str, now: datetime = None):
+    """The shared 'what I've already told him' log every judge reads, so no monitor
+    repeats what another one just said."""
+    now = now or datetime.now()
+    told = [t for t in state.get("told", [])
+            if datetime.fromisoformat(t["at"]) > now - TOLD_WINDOW]
+    told.append({"at": now.isoformat(timespec="minutes"), "text": " ".join(text.split())[:280]})
+    state["told"] = told[-15:]
+
+
+def judgment_context(state: dict = None):
+    """(standing rules, what he's been told lately): what every judgment prompt needs, so
+    a rule he set ("never mention the party", "ping me about interviews") binds every
+    monitor and none repeats another."""
+    try:
+        from instructions import render_for_prompt
+        rules = render_for_prompt()
+    except Exception:
+        rules = "(none)"
+    state = load_state() if state is None else state
+    told = "\n".join(
+        f"- {datetime.fromisoformat(t['at']).strftime('%a %-I:%M %p')}: {t['text']}"
+        for t in state.get("told", [])
+        if datetime.fromisoformat(t["at"]) > datetime.now() - TOLD_WINDOW)
+    return rules, told or "(nothing in the last two days)"
+
+
+def _llm_text(response) -> str:
+    content = response.content
+    if isinstance(content, list):
+        content = next((b['text'] for b in content
+                        if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+    return content
 
 
 def _parse_llm_json(content: str):
@@ -492,6 +544,125 @@ Return [] if none — that should be the common case."""
         return [Notification(header + "\n" + "\n".join(lines) + footer)]
 
 
+class MomentMonitor(Monitor):
+    """Looks ahead: around each meeting, flight and reservation on his calendar (see
+    moments.py), does the legwork first — the thread with the people involved, what he
+    owes them, the time in his timezone — then decides whether that adds anything to
+    Google's own reminder. Each touchpoint is considered once; silence is the default.
+    """
+
+    PROMPT = """You are Aria, deciding whether to text your user about something on his calendar,
+and writing the text if so. Google Calendar already reminds him the event exists, so speak
+ONLY if you can put something in his hands he doesn't already have: {guidance} If nothing
+below adds to the event itself, stay silent.
+
+How to write it: like a friend who has his back. Lead with what matters most, with the
+concrete details from what you found — names, the link, what they asked for. Give the time
+as HIS time (the "your time" one below): he travels, and an invite set in another timezone
+is how meetings get missed. Never state a detail that isn't below. Offer at most one concrete thing you can
+do (draft it, look something up, block time). Two to five short lines; no greeting, no
+stock opener ("Quick one", "Heads up"), no sign-off.
+
+The calendar event is the source of truth for WHEN it is and WHERE to join: emails can
+carry old or cancelled versions, so never give a time or join link that contradicts it.
+
+His standing rules — follow them; they override everything here:
+{rules}
+
+Already told him in the last two days (don't repeat it):
+{told}
+
+It is {now}, his time. This is the "{touchpoint}" touchpoint for:
+{event}
+
+What you found:
+{found}
+
+Return ONLY raw JSON (no markdown). Decide "why" first: one sentence on what, if anything,
+you found that he doesn't already have.
+{{"why": "<one sentence>", "send": true/false, "message": "<the text, or empty>"}}"""
+
+    GUIDANCE = {
+        ("meeting", "before"): "who it's with and what the email thread says he should have "
+            "ready — what they asked him to prepare, the format or agenda, the join link if "
+            "it's only in an email — plus anything he owes them. An invite set in another "
+            "timezone is reason enough on its own: say when it is for him.",
+        ("meeting", "after"): "the follow-through. After an interview, unless the thread "
+            "shows he's written to them since, offer in one line to draft a short thank-you "
+            "to the person he met (\"Want me to draft a thank-you to Sam for last night's "
+            "Acme interview?\"); if he or they promised something in the thread, offer that "
+            "instead. A routine meeting with nothing promised gets silence. Never ask how it "
+            "went.",
+        ("flight", "day_before"): "the departure in his local time, the airports and "
+            "terminal, the booking code if the email has it, when check-in opens if the email "
+            "says, and anything that makes the start tight.",
+        ("booking", "before"): "only what the reminder doesn't say — a change, a deposit or "
+            "cancellation deadline, details from the confirmation he'll need.",
+    }
+    ICON = {"meeting": "📅", "flight": "✈️", "booking": "📍"}
+
+    def __init__(self, interval_seconds=300, now_fn=None, quiet_hours=None):
+        super().__init__(name="moments", interval_seconds=interval_seconds)
+        self.now_fn = now_fn or (lambda: datetime.now().astimezone())
+        self.quiet_hours = quiet_hours
+
+    def check(self, state: dict) -> list:
+        import moments
+        now = self.now_fn()
+        me = moments.my_name()
+        upcoming = moments.upcoming(now, me)
+        today = now.strftime('%Y-%m-%d')
+        cutoff = (now - timedelta(days=4)).strftime('%Y-%m-%d')
+        done = {k: v for k, v in state.get("done", {}).items() if v >= cutoff}
+        tries = state.get("tries", {})
+        out = []
+        for m in upcoming:
+            for tp in moments.due_touchpoints(m, now, self.quiet_hours or moments.QUIET_HOURS):
+                key = f"{m.key}:{tp.name}"
+                if key in done:
+                    continue
+                try:
+                    note = self._consider(m, tp, now, me)
+                except Exception as e:
+                    # A flaky model shouldn't cost him the heads-up, nor retry forever.
+                    print(f"[engine] moments: {m.title!r} {tp.name} failed: {e}")
+                    tries[key] = tries.get(key, 0) + 1
+                    if tries[key] < 3:
+                        continue
+                    note = None
+                done[key] = today
+                tries.pop(key, None)
+                if note:
+                    out.append(note)
+        state["done"], state["tries"] = done, tries
+        return out
+
+    def _consider(self, m, tp, now, me):
+        import moments
+        found = moments.gather(m, me)
+        if not moments.has_substance(m, found):
+            return None    # nothing to add to Google's own reminder; skip the model call
+        rules, told = judgment_context()
+        sections = [found["email"] or "(no related email)"]
+        if found["commitments"]:
+            sections.append("Open commitments involving them:\n" + "\n".join(found["commitments"]))
+        if found["people"]:
+            sections.append("What you know about them:\n" + "\n".join(found["people"]))
+        prompt = self.PROMPT.format(
+            guidance=self.GUIDANCE[(m.kind, tp.name)], rules=rules, told=told,
+            now=now.strftime('%a %-d %b, %-I:%M %p'), touchpoint=tp.name,
+            event=moments.describe(m, now), found="\n\n".join(sections))
+        verdict = _parse_llm_json(_llm_text(_get_llm().invoke(prompt)))
+        message = (verdict.get("message") or "").strip()
+        if not verdict.get("send") or not message:
+            return None
+        bad = moments.unknown_call_links(message, m, found)
+        if bad:
+            print(f"[engine] moments: dropped {m.title!r} heads-up — unknown join link {bad}")
+            return None
+        return Notification(f"{self.ICON[m.kind]} {message}", kind="nudge")
+
+
 class ChaseMonitor(Monitor):
     """The chase loop: judgment-based nudges so open commitments don't quietly age out.
 
@@ -517,6 +688,12 @@ who has his back would text: lead with the one thing that matters most and why n
 offer one concrete thing you can do about it (block time on his calendar, draft the reply,
 pick a real date). Mention at most two other items, briefly. No stock greeting, no "on my
 radar", nothing that reads like a status report — and zero nagging tone.
+
+His standing rules — follow them; they override the guidance above:
+{rules}
+
+Already told him in the last two days (don't repeat it):
+{told}
 
 Today: {today}
 Open commitments (JSON):
@@ -557,8 +734,10 @@ Return ONLY raw JSON (no markdown):
             c["last_nudged"] = nudged.get(str(c["id"]))
             c["times_rescheduled"] = slips.get(c["id"], 0)
 
+        rules, told = judgment_context()
         response = _get_llm().invoke(
-            self.PROMPT.format(today=today, commitments=json.dumps(open_, indent=2)))
+            self.PROMPT.format(today=today, commitments=json.dumps(open_, indent=2),
+                               rules=rules, told=told))
         content = response.content
         if isinstance(content, list):
             content = next((b['text'] for b in content
@@ -578,7 +757,7 @@ Return ONLY raw JSON (no markdown):
             log_event(cid, 'nudged')   # audit trail: which nudges preceded action vs. silence
         state["nudged"] = nudged
         state["nudge_sent_date"] = today
-        return [Notification(verdict["message"])]
+        return [Notification(verdict["message"], kind="nudge")]
 
 
 class ReplyResolveMonitor(Monitor):
@@ -667,6 +846,9 @@ he might miss; a heads-up that gives useful lead time.
 NOT worth surfacing: restating his calendar or commitments (he can see those); generic
 reminders; anything obvious; anything similar to what you've recently told him.
 
+His standing rules — follow them; they override the guidance above:
+{rules}
+
 You have recently told him (do NOT repeat these or close variants):
 {recent}
 
@@ -720,9 +902,10 @@ Return ONLY JSON (no markdown):
             return []
 
         recent = state.get("recent", [])
+        rules, told = judgment_context()
         from llm_router import get_llm
         prompt = self.PROMPT.format(
-            recent="\n".join(f"- {r}" for r in recent) or "(nothing yet)",
+            recent="\n".join(f"- {r}" for r in recent) + "\n" + told, rules=rules,
             when=now.strftime('%A %-I%p'), context=context)
         try:
             resp = get_llm(temperature=0, tier="light").invoke(prompt)
@@ -744,7 +927,7 @@ Return ONLY JSON (no markdown):
             return []
         text = verdict["insight"].strip()
         state["recent"] = (recent + [text])[-8:]
-        return [Notification("💡 " + text)]
+        return [Notification("💡 " + text, kind="nudge")]
 
 
 class ReflectionMonitor(Monitor):
@@ -1042,15 +1225,29 @@ class ProactiveEngine:
         queue = state.setdefault("queued_notifications", [])
         quiet = self.in_quiet_hours(now)
 
+        today = (now or datetime.now()).strftime('%Y-%m-%d')
+        gate = state.get("gate", {})
+        if gate.get("day") != today:
+            gate = {"day": today, "nudges": 0}
         for n in new_notifications:
+            # One budget for everything she says on her own initiative, whichever monitor
+            # thought of it: proactivity that floods gets switched off (Muse's lesson).
+            if n.kind == "nudge":
+                if gate["nudges"] >= NUDGE_BUDGET:
+                    print(f"[engine] daily nudge budget spent — held: {n.text[:60]!r}")
+                    continue
+                gate["nudges"] += 1
             # Whatever happens to the *ping*, the action itself goes into Aria's
             # working memory so the chat agent can answer "what did you do?".
             _record_to_memory(n.text)
+            _remember_told(state, n.text, now)
             if quiet and not n.urgent:
                 print(f"[engine] quiet hours — queued: {n.text[:60]!r}")
                 queue.append(n.text)
             else:
                 self.notify_fn(n.text)
+
+        state["gate"] = gate
 
         if not quiet and queue:
             digest = "🌅 While you were away:\n\n" + "\n\n".join(f"• {t}" for t in queue)
@@ -1078,7 +1275,7 @@ class ProactiveEngine:
 
 def default_engine(notify_fn=send_telegram) -> ProactiveEngine:
     return ProactiveEngine(
-        monitors=[CommitmentMonitor(), EmailDigestMonitor(), ChaseMonitor(),
+        monitors=[CommitmentMonitor(), EmailDigestMonitor(), MomentMonitor(), ChaseMonitor(),
                   InsightMonitor(), ReflectionMonitor(), WeeklyReflectionMonitor(),
                   ReplyResolveMonitor(), NetflixMonitor(), HealthMonitor(), HeartbeatMonitor()],
         notify_fn=notify_fn,

@@ -14,6 +14,7 @@ Use these when the *why* would otherwise live only in a code comment or someone'
 | [0006](0006-calendar-connector-scopes.md) | Google Calendar connector and its scopes | Accepted |
 | [0007](0007-per-tenant-gmail-custody.md) | Per-tenant Gmail custody (guest account connect) | Accepted |
 | [0008](0008-retire-cold-storage-tier.md) | Retire the cold-storage tier: one uncapped, dated semantic store | Accepted (supersedes 0002 Tier 3) |
+| [0009](0009-moments-and-one-gate.md) | Proactivity as an engine: moments, legwork first, one gate | Accepted (builds on 0004) |
 
 ## Writing a new ADR
 

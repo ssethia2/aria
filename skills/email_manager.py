@@ -387,7 +387,7 @@ def read_email_thread(search_query: str) -> str:
 
     Args:
         search_query: a Gmail search, in the user's words
-            (e.g. 'project x', 'from:rohan trip', 'subject:"apartment listings"').
+            (e.g. 'launch plan', 'from:rohan trip', 'subject:"apartment listings"').
     """
     import email_backend
     if email_backend.using_app_password():

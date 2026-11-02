@@ -163,10 +163,10 @@ class TestReadEmailThread(unittest.TestCase):
 
     def test_returns_thread_contents(self):
         svc = self._service([{'id': 't1', 'snippet': 'We should book'}], {'t1': [
-            _gmail_msg('Rohan <r@x.com>', 'Project X', 'We should book flights for July.')]})
-        out = self._read(svc, 'project x')
+            _gmail_msg('Rohan <r@x.com>', 'Launch plan', 'We should book flights for July.')]})
+        out = self._read(svc, 'launch plan')
         self.assertIn('Rohan', out)
-        self.assertIn('Project X', out)
+        self.assertIn('Launch plan', out)
         self.assertIn('book flights', out)
 
     def test_lists_every_match_not_just_the_newest(self):

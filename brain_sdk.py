@@ -265,6 +265,7 @@ class SubscriptionBrain:
             # bridged from the mirror with each carried-over line dated.
             session = th.get("session_id") if th.get("session_day") == today else None
             unsynced = list(th.get("unsynced", []))
+            notes = list(th.get("notes", []))
             has_history = bool(th.get("messages"))
 
         prompt = text
@@ -281,6 +282,15 @@ class SubscriptionBrain:
             prompt = (f"<missed_context>While you were unavailable, these exchanges were "
                       f"handled for you (already answered — context only, do not re-answer):"
                       f"\n{gap}</missed_context>\n\n{prompt}")
+        if session is not None and notes:
+            # What the engine texted him since this session's last turn. Without it a
+            # resumed session never saw its own heads-up, so "yes" to "want me to draft
+            # the thank-you?" landed on a session with no idea what it had offered.
+            sent = "\n".join(f"{stamp(datetime.fromisoformat(n['at']))} {n['content'][:600]}"
+                             for n in notes)
+            prompt = (f"<sent_since_your_last_turn>Your background engine sent him these "
+                      f"messages after your last exchange — he may be replying to one:\n"
+                      f"{sent}</sent_since_your_last_turn>\n\n{prompt}")
 
         result = {"reply": None, "session_id": session}
         texts = []
@@ -348,6 +358,8 @@ class SubscriptionBrain:
             th["session_id"] = result["session_id"]
             th["session_day"] = today
             th["unsynced"] = []          # the gap is absorbed — clear only on success
+            # Drop only the notes this turn carried; one the engine sent mid-turn waits.
+            th["notes"] = th.get("notes", [])[len(notes):]
             mirror = th.setdefault("messages", [])
             mirror.extend([_mirror_entry("human", text), _mirror_entry("ai", reply)])
             th["messages"] = mirror[-MIRROR_MAX:]
@@ -466,4 +478,8 @@ class SubscriptionBrain:
             state = _load_state()
             th = state.setdefault("threads", {}).setdefault(self._thread_of(config), {})
             th["messages"] = (th.get("messages", []) + entries)[-MIRROR_MAX:]
+            if all(e["type"] == "ai" for e in entries):
+                # An engine message (no human turn): the live session hasn't seen it, so
+                # it rides into the next turn's prompt (_run_turn).
+                th["notes"] = (th.get("notes", []) + entries)[-8:]
             _save_state(state)

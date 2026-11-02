@@ -50,10 +50,13 @@ User-given persistent rules ("from now on…") are stored in `instructions.json`
 
 A daemon thread inside the bot runs pluggable `Monitor`s, each on its own interval, with quiet hours (23:00–08:00 queues non-urgent pings into a morning digest) and per-monitor state in `engine_state.json`. Every monitor call is exception-guarded so one failure never takes down the rest. See [ADR 0004](adr/0004-polling-engine-over-webhooks.md).
 
+Everything Aria says on her own judgment passes one gate ([ADR 0009](adr/0009-moments-and-one-gate.md)): judgment pings ("nudges" — chase, insight, moments) share a daily budget, and every judge reads the same standing rules and the same 48-hour log of what she has already told him, so a rule binds every monitor and none repeats another. Reports (reminders he set, digests, results of actions) always go through. Engine messages reach the live conversation too, so he can answer an offer with "yes".
+
 | Monitor | What it does |
 |---|---|
 | `CommitmentMonitor` | Pings timed/recurring commitments at their moment; advances recurrences |
 | `EmailDigestMonitor` | Deterministic bulk pre-filter → LLM-screens the rest (with his standing rules) → one evening digest, or an immediate ping when a rule asks for one; replies-owed become commitments (never calendar invites, payment requests or no-reply senders). Also closes deadline/promise commitments that new mail (inbound, or his own sent mail) proves done, and says so — only when the email contains a word unique to that commitment, so a proof can't land on the wrong item |
+| `MomentMonitor` | Looks ahead at his calendar (`moments.py`): an hour before a meeting, the morning after it, the day before a flight, a few hours before a reservation. Does the legwork first (the email thread with the people involved, commitments to them, the time in his timezone), then speaks only if that adds to Google's own reminder. The event is the source of truth for time and join link; a link that appears in neither the event nor the mail drops the message |
 | `ChaseMonitor` | Daytime LLM judgment over open commitments → at most one warm nudge/day |
 | `InsightMonitor` | Twice-daily cross-source synthesis (calendar + commitments + weather) → one non-obvious insight, or silence |
 | `HealthMonitor` | Re-runs the self-diagnosis; alerts when something turns FAIL |
@@ -88,6 +91,7 @@ memory.py                Profile + ChromaDB semantic memory + memory tools
 people.py                People model
 instructions.py          Standing-instructions registry
 engine.py                Proactivity engine + all monitors
+moments.py               Anticipation layer: calendar moments, touchpoints, pre-heads-up legwork
 healthcheck.py           Self-diagnosis (doctor / tool / startup / monitor)
 heartbeat.py             External dead-man's-switch ping
 notify.py                Outbound Telegram notifications
