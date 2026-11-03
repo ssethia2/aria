@@ -5,8 +5,9 @@ Run: python3 -m unittest discover tests
 """
 import os
 import tempfile
+import time
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 from skills import google_calendar as gc
@@ -187,6 +188,30 @@ class TestFetchDedupe(TempConfigMixin, unittest.TestCase):
     def test_scoped_shared_without_config_is_empty(self):
         with patch.object(gc, 'get_calendar_service', return_value=MagicMock()):
             self.assertEqual(gc.fetch_events(days=3, calendar='shared'), [])
+
+    def test_times_read_in_his_timezone_over_the_next_24_hours(self):
+        # The briefing ran in his evening abroad and listed a New York 6:30 PM call as
+        # "Tue 18:30" — it was 3:30 AM Wednesday where he was.
+        service = MagicMock()
+        call = {'summary': 'Late call', 'start': {'dateTime': '2026-11-03T18:30:00-05:00',
+                                                 'timeZone': 'America/New_York'}}
+        service.events.return_value.list.return_value.execute.return_value = {'items': [call]}
+        tz = os.environ.get('TZ')
+        os.environ['TZ'] = 'Asia/Dubai'
+        time.tzset()
+        try:
+            with patch.object(gc, 'get_calendar_service', return_value=service):
+                lines = gc.fetch_events(hours=24, calendar='personal')
+        finally:
+            if tz is None:
+                os.environ.pop('TZ')
+            else:
+                os.environ['TZ'] = tz
+            time.tzset()
+        self.assertEqual(lines, ['Wed 3:30 AM — Late call'])
+        kw = service.events.return_value.list.call_args.kwargs
+        window = datetime.fromisoformat(kw['timeMax']) - datetime.fromisoformat(kw['timeMin'])
+        self.assertEqual(window, timedelta(hours=24))
 
     def test_tool_rejects_bad_scope(self):
         self.assertIn("Error", gc.get_calendar_events.invoke(

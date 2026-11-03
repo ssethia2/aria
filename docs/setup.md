@@ -54,13 +54,14 @@ With the Gmail-API path set up (`auth_google.py` requests the calendar scopes to
 | Realtime voice (`voice_live.py`, `webvoice/`) | `GEMINI_API_KEY` (powers Gemini Live); optional `ARIA_LIVE_MODEL` to override the model. `webvoice/run.sh` + a tunnel serves it to your phone (PWA); for always-on hosting see [webvoice/deploy/HOSTING.md](../webvoice/deploy/HOSTING.md). |
 | Voice barge-in on speakers (optional) | `brew install speexdsp` for echo cancellation in `voice_live.py --aec`; otherwise headphones (`--duplex`) or the default mic-gate |
 | Disable the proactivity engine | `ARIA_ENGINE_DISABLED=1` |
+| Briefing time | `BRIEFING_TIME=08:00`, `BRIEFING_TZ=America/New_York` (blank = host time; the agenda always reads in host time) |
 | Netflix Household automation | second Gmail account: `python3 auth_netflix.py` → `token_netflix.json` |
 
 See [`.env.example`](../.env.example) for the annotated list.
 
 ## Running it as a service
 
-**macOS (launchd):** `launchd/` has two agents — the bot (starts at login, auto-restarts on crash) and the 08:00 briefing (fires on wake if the machine was asleep):
+**macOS (launchd):** `launchd/` has two agents — the bot (starts at login, auto-restarts on crash) and the briefing (`BRIEFING_TIME` in `BRIEFING_TZ`, default 08:00 host time; fires on wake if the machine was asleep):
 ```bash
 cp launchd/*.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aria.telegram-bot.plist

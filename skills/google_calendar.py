@@ -402,8 +402,12 @@ def get_calendar_events(days: int = 1, calendar: str = 'both') -> str:
     return f"{label}:\n" + "\n".join(f"- {e}" for e in events)
 
 
-def fetch_events(days: int = 1, calendar: str = 'both'):
+def fetch_events(days: int = 1, calendar: str = 'both', hours: int = None):
     """Event lines for tools and the briefing. Returns None when the service isn't there.
+
+    The window runs from now through the end of the day `days` ahead, or exactly `hours`
+    ahead when given (the briefing's "next 24 hours"). Times are in the host's timezone,
+    which follows him when he travels: an invite set in New York reads as his own time.
 
     calendar='both' (default): personal + shared merged, dual-written copies collapsed to
     one line, and events that exist ONLY on the shared calendar tagged '[shared only]' —
@@ -415,7 +419,9 @@ def fetch_events(days: int = 1, calendar: str = 'both'):
         return None
     now = datetime.now().astimezone()
     time_min = now.isoformat()
-    time_max = (now + timedelta(days=days)).replace(hour=23, minute=59).isoformat()
+    end = (now + timedelta(hours=hours) if hours else
+           (now + timedelta(days=days)).replace(hour=23, minute=59))
+    time_max = end.isoformat()
 
     shared_id = _load_config().get('shared_calendar_id')
     sources = []
@@ -448,7 +454,7 @@ def fetch_events(days: int = 1, calendar: str = 'both'):
     lines = []
     for e in sorted(found.values(), key=lambda x: x["when"]):   # chronological across cals
         if 'dateTime' in e["start"]:
-            label = datetime.fromisoformat(e["when"]).strftime('%a %H:%M')
+            label = datetime.fromisoformat(e["when"]).astimezone().strftime('%a %-I:%M %p')
         else:
             label = datetime.fromisoformat(e["when"]).strftime('%a') + " (all day)"
         tag = " [shared only]" if (calendar == 'both' and e["cals"] == {'shared'}) else ""

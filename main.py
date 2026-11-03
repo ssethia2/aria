@@ -7,6 +7,7 @@ Telegram alert rather than a silent miss. For the conversational interfaces see
 telegram_bot.py / interact.py.
 """
 import traceback
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -18,6 +19,15 @@ from skills.commitment_manager import (get_due_commitments, get_upcoming_commitm
 from notify import send_telegram
 
 load_dotenv()
+
+
+def greeting(now=None) -> str:
+    """By his clock, not the schedule's: a briefing pinned to his home timezone can land
+    in his evening when he travels."""
+    hour = (now or datetime.now().astimezone()).hour
+    if 5 <= hour < 12:
+        return "☀️ Good morning!"
+    return "🌤 Good afternoon!" if hour < 17 else "🌙 Good evening!"
 
 
 def deliver(telegram_md: str, email_md: str) -> list:
@@ -35,7 +45,7 @@ def deliver(telegram_md: str, email_md: str) -> list:
     except Exception as e:
         print(f"Weather for briefing failed: {e}")
 
-    if send_telegram(f"☀️ Good morning! {weather}Here's your day:\n\n{telegram_md}"):
+    if send_telegram(f"{greeting()} {weather}Here's your next 24 hours:\n\n{telegram_md}"):
         delivered.append("telegram")
 
     try:
@@ -61,11 +71,12 @@ def main():
 
     classifications, raw_emails = run_email_summary()
     news_briefing = generate_news_brief()
-    # Agenda: today's calendar first, then due/overdue commitments, then the week ahead.
+    # Agenda: the next 24 hours of calendar (a call at 1am is tonight's problem, not
+    # tomorrow's), then due/overdue commitments, then the week ahead.
     reminders = []
     try:
         from skills.google_calendar import fetch_events
-        for line in (fetch_events(days=1) or []):
+        for line in (fetch_events(hours=24) or []):
             reminders.append({'task': f"🗓 {line}"})
     except Exception as e:
         print(f"Calendar fetch for briefing failed: {e}")

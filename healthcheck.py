@@ -16,7 +16,7 @@ import shutil
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
@@ -103,14 +103,21 @@ def check_engine_freshness():
 
 
 def check_briefing_today():
-    """After 9am, today's briefing report should exist — catches the silent-fail bug."""
-    now = datetime.now()
-    if now.hour < 9:
-        return OK, "before 9am — briefing not due yet"
-    report = _p('reports', f"daily_summary_{now.strftime('%Y-%m-%d')}.md")
-    if os.path.exists(report):
+    """An hour after its slot, the latest briefing should have finished — catches the
+    silent-fail bug. The slot is morning_run's (BRIEFING_TIME in BRIEFING_TZ)."""
+    import morning_run
+    now = datetime.now().astimezone()
+    at = morning_run.scheduled_for(now)
+    if now - at < timedelta(hours=1):
+        return OK, "briefing not due yet"
+    ok_ts = morning_run.load_state().get('last_ok_ts')
+    if ok_ts is None:        # installs from before the state file: the report is the signal
+        report = _p('reports', f"daily_summary_{now.strftime('%Y-%m-%d')}.md")
+        if os.path.exists(report):
+            return OK, "today's briefing ran"
+    elif ok_ts >= at.timestamp():
         return OK, "today's briefing ran"
-    return WARN, "no briefing report for today — did the 08:00 job fire?"
+    return WARN, f"no briefing since the {at:%H:%M %Z} slot — did the job fire?"
 
 
 def check_heartbeat():

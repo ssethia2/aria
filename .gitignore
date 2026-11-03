@@ -43,6 +43,7 @@ daily_scratchpad.txt
 *.db-wal
 logs/
 engine_state.json
+briefing_state.json
 router_alerts.json
 calendar_config.json
 instructions.json

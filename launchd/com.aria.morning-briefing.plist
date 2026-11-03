@@ -2,9 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Aria's morning briefing at 08:00 daily (compaction + briefing via morning_run.py).
+    <!-- Aria's morning briefing (compaction + briefing via morning_run.py). launchd
+         wakes it every 15 minutes; morning_run.py decides whether it's time, from
+         BRIEFING_TIME / BRIEFING_TZ in .env (default 08:00 host time). A plist hour
+         would follow whatever timezone launchd booted with, not where you are.
          Unlike cron, launchd fires a missed schedule once on wake if the laptop was
-         asleep at 08:00 — the briefing arrives when you open the lid.
+         asleep — the briefing arrives when you open the lid.
          Invokes the venv python directly (NOT run.sh): macOS TCC denies /bin/bash
          access to ~/Documents in launchd context, while this Python binary holds
          the grant. -->
@@ -22,12 +25,12 @@
     <string>/Users/satviksethia/Documents/personal-assistant</string>
 
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>8</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <array>
+        <dict><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Minute</key><integer>15</integer></dict>
+        <dict><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Minute</key><integer>45</integer></dict>
+    </array>
 
     <key>StandardOutPath</key>
     <string>/Users/satviksethia/Documents/personal-assistant/logs/morning_briefing.log</string>
