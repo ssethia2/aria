@@ -15,6 +15,7 @@ Use these when the *why* would otherwise live only in a code comment or someone'
 | [0007](0007-per-tenant-gmail-custody.md) | Per-tenant Gmail custody (guest account connect) | Accepted |
 | [0008](0008-retire-cold-storage-tier.md) | Retire the cold-storage tier: one uncapped, dated semantic store | Accepted (supersedes 0002 Tier 3) |
 | [0009](0009-moments-and-one-gate.md) | Proactivity as an engine: moments, legwork first, one gate | Accepted (builds on 0004) |
+| [0010](0010-conversations-are-memory.md) | Conversations are memory: every exchange is compacted nightly | Accepted (extends 0002/0008) |
 
 ## Writing a new ADR
 

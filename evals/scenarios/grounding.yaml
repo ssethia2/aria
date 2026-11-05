@@ -42,3 +42,23 @@
         called_with:
           add_commitment: {due_date_iso: {one_of: ["{{today+10}}", "{{today+9}}"]}}
         reply_not_matches: ["what('s| is) today", "today's date", "what (date|day) is it", "clock"]
+
+- id: two-trips-right-airline
+  why: "Live bug: he asked to call an airline about one leg of a trip; she'd forgotten the itinerary they built two days earlier, guessed that airline's booking, then said an unreadable email 'confirmed' it. The leg he meant belongs to the other booking; say so from memory, never invent a match."
+  tools:
+    search_memory: |
+      Semantic Memory (Past):
+      - Flight from Porto to Lisbon on November 27 2026: TravelCo booking, TAP TP 202 Porto 7:30am to Lisbon 8:35am. (noted 2026-11-03)
+      - Northwind Air booking QX12AB: Lisbon departing December 17 2026 at 00:30, Paris 05:05, then Boston. (noted 2026-11-03)
+    read_email_thread: |
+      Matching threads, newest first:
+      1. Flying Club <crm@service.example.com> — Your booking confirmation QX12AB (1 message)
+      Thread 1 in full: Flying Club &zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;
+  turns:
+    - user: "I need to call Northwind and change my flight from Porto to Lisbon"
+      expect:
+        reply_matches: ['TP ?202|TravelCo|TAP']
+        judge: >
+          Says the Porto→Lisbon flight is the TAP TP 202 on the TravelCo booking, not Northwind's
+          QX12AB (Northwind is the December return), so Northwind isn't who changes it. Does NOT claim QX12AB
+          covers Porto→Lisbon or that any email confirmed it. Asks at most one question.

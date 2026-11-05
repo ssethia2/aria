@@ -151,6 +151,13 @@ class Sandbox:
         self._start(instructions, "INSTRUCTIONS_PATH", os.path.join(d, "instructions.json"))
         self._start(grocery_manager, "LIST_PATH", os.path.join(d, "grocery_list.json"))
         self._start(memory, "PROFILE_PATH", os.path.join(d, "profile.json"))
+        # Every exchange is logged for nightly compaction: eval chats must never become
+        # his memories.
+        self._start(memory, "CONVERSATION_PATH", os.path.join(d, "conversation.jsonl"))
+        self._start(memory, "SCRATCHPAD_PATH", os.path.join(d, "scratchpad.txt"))
+        # Recall before each turn reads the scenario's memory, never his real store.
+        self._start(memory, "recall", lambda message, n_results=5: str(
+            self.overrides.get("search_memory", "")).strip())
         self._start(google_calendar, "CONFIG_PATH", os.path.join(d, "calendar_config.json"))
 
         # Subscription brain: throwaway session state, no Telegram alerts, fresh fallback.
@@ -213,13 +220,7 @@ class Sandbox:
         orig = t.func
         sandbox = self
 
-        @functools.wraps(orig)
-        def wrapper(*args, **kwargs):
-            call_args = {k: v for k, v in kwargs.items() if k != "config"}
-            with sandbox._lock:
-                sandbox.calls.append({"tool": name, "args": call_args, "turn": sandbox.turn})
-                n = sandbox._counts.get(name, 0)
-                sandbox._counts[name] = n + 1
+        def run(n, call_args, args, kwargs):
             if name in sandbox.overrides:
                 out = sandbox.overrides[name]
                 if isinstance(out, list):
@@ -228,6 +229,20 @@ class Sandbox:
             if name in REAL_TOOLS:
                 return orig(*args, **kwargs)
             return _render(DEFAULT_FAKES.get(name, GENERIC_FAKE), call_args)
+
+        @functools.wraps(orig)
+        def wrapper(*args, **kwargs):
+            call_args = {k: v for k, v in kwargs.items() if k != "config"}
+            record = {"tool": name, "args": call_args, "turn": sandbox.turn}
+            with sandbox._lock:
+                sandbox.calls.append(record)
+                n = sandbox._counts.get(name, 0)
+                sandbox._counts[name] = n + 1
+            out = run(n, call_args, args, kwargs)
+            # The judge sees what each tool returned: "report only what the calendar said"
+            # can't be graded from the call alone (it failed a correct reply 1 run in 3).
+            record["output"] = str(out)[:800]
+            return out
 
         return t.model_copy(update={"func": wrapper})
 

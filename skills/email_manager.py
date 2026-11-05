@@ -345,15 +345,34 @@ def _gather_bodies(payload, plains, htmls):
         _gather_bodies(part, plains, htmls)
 
 
+_INVISIBLE = re.compile(r'[\u200b-\u200f\u00ad\u034f\u2060\ufeff]')
+
+
+def _readable(text: str) -> str:
+    """Entities decoded, invisible preheader padding dropped, one line per line."""
+    text = _INVISIBLE.sub('', html.unescape(text)).replace('\u00a0', ' ')
+    lines = (" ".join(line.split()) for line in text.splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def _html_text(raw: str) -> str:
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(raw, "lxml")
+    for tag in soup(["style", "script", "head", "title", "noscript"]):
+        tag.decompose()
+    return _readable(soup.get_text("\n"))
+
+
 def _body_text(payload) -> str:
-    """Plain-text body of a Gmail message (prefers text/plain; strips tags from HTML)."""
+    """Readable body of a Gmail message: text/plain unless it's a stub of the HTML.
+
+    Booking mail is the hard case. A travel site sent HTML only, and stripping tags kept
+    its CSS, so the flight never showed; an airline's plain part was &zwnj;&nbsp; padding."""
     plains, htmls = [], []
     _gather_bodies(payload, plains, htmls)
-    if any(p.strip() for p in plains):
-        return "\n".join(plains).strip()
-    if htmls:
-        return re.sub(r'<[^>]+>', ' ', "\n".join(htmls)).strip()
-    return ""
+    plain = _readable("\n".join(plains))
+    rich = _html_text("\n".join(htmls)) if htmls else ""
+    return plain if len(plain) * 2 >= len(rich) else rich
 
 
 # Aria's own morning email (main.py) quotes every open commitment, so searching for any of
@@ -430,9 +449,11 @@ def read_email_thread(search_query: str) -> str:
                        f"   {html.unescape(re.sub(r'</?b>', '', t.get('snippet', '')))}")
 
     parts = []
-    for msg in newest[-5:]:                         # last few messages in the thread
+    recent = newest[-5:]                            # last few messages in the thread
+    for j, msg in enumerate(recent):
         h = headers(msg)
-        text = " ".join(_body_text(msg['payload']).split())[:1500]
+        # The newest gets room: a booking's flights sit below the greeting and the hotel.
+        text = _body_text(msg['payload'])[:6000 if j == len(recent) - 1 else 1500]
         parts.append(f"From: {h.get('From', '?')}\n"
                      f"Subject: {h.get('Subject', '?')}\n"
                      f"Date: {h.get('Date', '?')}\n\n{text}")

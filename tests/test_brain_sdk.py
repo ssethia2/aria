@@ -31,12 +31,20 @@ def _brain():
 
 class TempState(unittest.TestCase):
     def setUp(self):
+        import memory
         self.d = tempfile.TemporaryDirectory()
+        self.convo = Path(self.d.name) / "conversation.jsonl"
         self._p = patch.object(brain_sdk, "STATE_PATH", Path(self.d.name) / "state.json")
-        self._p.start()
+        self._c = patch.object(memory, "CONVERSATION_PATH", str(self.convo))
+        self._r = patch.object(memory, "recall", return_value="")     # never his real store
+        self._p.start(); self._c.start(); self._r.start()
 
     def tearDown(self):
-        self._p.stop(); self.d.cleanup()
+        self._r.stop(); self._c.stop(); self._p.stop(); self.d.cleanup()
+
+    def logged(self):
+        import memory
+        return [(e["user"], e["aria"]) for e in memory.load_exchanges()]
 
 
 class TestFacade(TempState):
@@ -84,6 +92,70 @@ class TestFacade(TempState):
         self.assertEqual(len(b.get_state(cfg).values["messages"]), brain_sdk.MIRROR_MAX)
 
 
+class TestConversationMemory(TempState):
+    """He walked her through a trip itinerary; two days later it was gone. Every exchange
+    now goes to the conversation log that nightly compaction reads."""
+
+    def test_subscription_and_fallback_exchanges_are_logged_engine_notes_are_not(self):
+        b = _brain()
+        cfg = {"configurable": {"thread_id": "t"}}
+
+        def fake_query(prompt=None, options=None):
+            async def gen():
+                yield AssistantMessage("Noted: TP 202 on Nov 14.")
+                yield ResultMessage("s1")
+            return gen()
+
+        def fake_anyio_run(fn):
+            import asyncio
+            asyncio.run(fn())
+
+        with patch("claude_agent_sdk.query", fake_query), \
+             patch.object(brain_sdk.anyio, "run", fake_anyio_run):
+            b._run_turn("t", "Flying home on TP 202, Nov 14")
+        b.update_state(cfg, {"messages": [AIMessage(content="📅 Interview in 59m")]})
+        b.update_state(cfg, {"messages": [HumanMessage(content="what time?"),
+                                          AIMessage(content="10 PM")]})
+        self.assertEqual(self.logged(), [("Flying home on TP 202, Nov 14", "Noted: TP 202 on Nov 14."),
+                                         ("what time?", "10 PM")])
+
+
+class TestRecall(TempState):
+    """The trip was in memory, but she went to email instead, found an unreadable
+    confirmation, and guessed. What she knows now rides in with the message."""
+
+    def _prompt(self, text):
+        seen = {}
+
+        def fake_query(prompt=None, options=None):
+            seen["prompt"] = prompt
+
+            async def gen():
+                yield AssistantMessage("ok")
+                yield ResultMessage("s1")
+            return gen()
+
+        def fake_anyio_run(fn):
+            import asyncio
+            asyncio.run(fn())
+
+        with patch("claude_agent_sdk.query", fake_query), \
+             patch.object(brain_sdk.anyio, "run", fake_anyio_run):
+            _brain()._run_turn("t", text)
+        return seen["prompt"]
+
+    def test_what_she_knows_rides_in_with_the_message(self):
+        import memory
+        memory.recall.return_value = "- Porto to Lisbon is TP 202 on the TravelCo booking."
+        prompt = self._prompt("change my flight from Porto to Lisbon")
+        self.assertIn("<what_you_remember>", prompt)
+        self.assertIn("TP 202", prompt)
+        self.assertTrue(prompt.endswith("change my flight from Porto to Lisbon"))
+
+    def test_nothing_remembered_adds_nothing(self):
+        self.assertNotIn("<what_you_remember>", self._prompt("yes please"))
+
+
 class TestBridging(unittest.TestCase):
     def test_lc_tool_bridged_with_name_and_schema(self):
         captured = {}
@@ -108,6 +180,61 @@ class TestBridging(unittest.TestCase):
         with patch.dict(os.environ, {"ENABLE_TOOL_SEARCH": "true"}):
             env = brain_sdk._clean_env()
         self.assertEqual(env["ENABLE_TOOL_SEARCH"], "false")
+
+    def test_a_dotenv_reload_while_building_options_does_not_reach_the_cli(self):
+        # Live: a fresh process's first turn imported agent_core while building options;
+        # llm_router's load_dotenv() put the key back and the turn billed the API.
+        seen = {}
+        b = SubscriptionBrain(tools=[fake_weather])
+        real_options = b._options
+
+        def options_that_reload_env(resume=None):
+            os.environ["ANTHROPIC_API_KEY"] = "sk-ant-secret"
+            return real_options(resume)
+
+        def fake_query(prompt=None, options=None):
+            seen["key_at_spawn"] = os.environ.get("ANTHROPIC_API_KEY", "ABSENT")
+
+            async def gen():
+                if False:
+                    yield
+            return gen()
+
+        def fake_anyio_run(fn):
+            import asyncio
+            asyncio.run(fn())
+
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(brain_sdk, "STATE_PATH", Path(d) / "s.json"), \
+             patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-secret"}), \
+             patch.object(b, "_options", options_that_reload_env), \
+             patch("claude_agent_sdk.query", fake_query), \
+             patch.object(brain_sdk.anyio, "run", fake_anyio_run):
+            with self.assertRaises(brain_sdk.BrainUnavailable):
+                b._run_turn("t", "hi")
+            self.assertEqual(seen["key_at_spawn"], "ABSENT")
+            self.assertEqual(os.environ["ANTHROPIC_API_KEY"], "sk-ant-secret")
+
+    def test_a_restated_answer_is_sent_once(self):
+        first = ("Good to know — I'll stop treating Acme/Kim as cold outreach to ignore since "
+                 "you're actively interviewing there. Want me to pull up her latest email?")
+        again = ("Noted — you're actively interviewing with several companies, including Acme "
+                 "via Kim Park. I'll stop flagging her emails as cold outreach. Want me to pull "
+                 "up her latest message to see what she needs?")
+        self.assertEqual(brain_sdk._join_reply([first, again]), again)
+        self.assertEqual(brain_sdk._join_reply(["Marked it done.", "Also — Acme wants an interview."]),
+                         "Marked it done.\n\nAlso — Acme wants an interview.")
+
+    def test_cli_is_the_installed_claude_code_when_there_is_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            cli = Path(d) / "claude"
+            cli.write_text("#!/bin/sh\n"); cli.chmod(0o755)
+            with patch.dict(os.environ, {"ARIA_CLAUDE_CLI": str(cli)}):
+                self.assertEqual(brain_sdk._cli_path(), str(cli))
+            with patch.dict(os.environ, {"ARIA_CLAUDE_CLI": ""}), \
+                 patch.object(brain_sdk.shutil, "which", return_value=None), \
+                 patch.object(brain_sdk.os.path, "expanduser", return_value=str(Path(d) / "none")):
+                self.assertIsNone(brain_sdk._cli_path())          # bundled CLI fallback
 
     def test_run_turn_pops_key_from_process_env_and_restores(self):
         # The SDK MERGES env over the parent process env, so the key must be gone from
@@ -354,6 +481,23 @@ class TestDatesAndDailySessions(TempState):
              patch.object(SubscriptionBrain, "_record_usage"):
             b._run_turn(thread, text)
         return seen
+
+    def test_in_the_small_hours_tomorrow_means_the_day_already_begun(self):
+        # 4:12 AM Thursday: "this needs to happen tomorrow" was filed for Friday.
+        import agent_core
+
+        def clock_at(hour):
+            class Clock(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return datetime(2026, 11, 5, hour, 12)
+            return Clock
+
+        with patch.object(agent_core, "datetime", clock_at(4)):
+            text = agent_core.build_system_message().content[1]["text"]
+        self.assertIn('"tomorrow" means today (Thursday 2026-11-05)', text)
+        with patch.object(agent_core, "datetime", clock_at(9)):
+            self.assertNotIn("small hours", agent_core.build_system_message().content[1]["text"])
 
     def _seed(self, thread, **th):
         brain_sdk.STATE_PATH.write_text(json.dumps({"threads": {thread: th}}))

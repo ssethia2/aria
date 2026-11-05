@@ -3,6 +3,7 @@
 LLM and the ChromaDB store are mocked; these run offline.
 Run: python3 -m unittest discover tests
 """
+import json
 import os
 import tempfile
 import unittest
@@ -15,23 +16,43 @@ class TestCompactionFilter(unittest.TestCase):
     def setUp(self):
         fd, self.scratch = tempfile.mkstemp(suffix=".txt")
         os.close(fd)
+        fd, self.convo = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        os.unlink(self.convo)                   # no conversation unless a test writes one
+        self._c = patch.object(nightly_compaction, 'CONVERSATION_PATH', self.convo)
+        self._c.start()
+        self.llm = MagicMock()
 
     def tearDown(self):
-        if os.path.exists(self.scratch):
-            os.unlink(self.scratch)
+        self._c.stop()
+        for path in (self.scratch, self.convo):
+            if os.path.exists(path):
+                os.unlink(path)
 
     def _run(self, scratch_content, llm_output):
         with open(self.scratch, "w") as f:
             f.write(scratch_content)
 
-        llm = MagicMock()
-        llm.invoke.return_value = MagicMock(content=llm_output)
+        self.llm.invoke.return_value = MagicMock(content=llm_output)
         store = MagicMock(side_effect=lambda facts, added: len(facts))
         with patch.object(nightly_compaction, 'SCRATCHPAD_PATH', self.scratch), \
-             patch.object(nightly_compaction, 'get_llm', return_value=llm), \
+             patch.object(nightly_compaction, 'get_llm', return_value=self.llm), \
              patch.object(nightly_compaction, 'store_facts', store):
             nightly_compaction.compact_scratchpad()
         return store
+
+    def test_conversations_are_compacted_then_wiped(self):
+        # The itinerary he pasted in chat never reached memory; only add_memory did.
+        with open(self.convo, "w") as f:
+            f.write(json.dumps({"at": "2026-11-03T20:45", "user": "Flying home on TP 202, Lisbon 11:55 Nov 14",
+                                "aria": "Got it."}) + "\n")
+        fact = "Sam flies home on TP 202 from Lisbon at 11:55 on Nov 14, 2026."
+        store = self._run("", fact)
+        prompt = self.llm.invoke.call_args.args[0][1].content
+        self.assertIn("User: Flying home on TP 202, Lisbon 11:55 Nov 14", prompt)
+        self.assertEqual(self._stored(store), [fact])
+        with open(self.convo) as f:
+            self.assertEqual(f.read(), "")
 
     def _stored(self, store):
         return store.call_args.args[0] if store.called else []

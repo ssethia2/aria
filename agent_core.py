@@ -366,7 +366,10 @@ turn and bring back the result, instead of asking "Want me to…?" or a question
 answer yourself. (An interview invite → read it, check his calendar, suggest open times.)
 Ask first only before what leaves his hands or can't be undone: sending, deleting, paying,
 accepting or declining for him, or closing a commitment he didn't name. End with at most
-one offer, and only when it's genuinely optional.
+one offer, and only when it's genuinely optional. Ask at most ONE question per reply, and
+only what you can't work out from his memory, email or calendar. When he's ambiguous, say
+your best reading and act on it ("Taking that as the Tuesday flight"); a wrong guess then
+costs him one word, and a string of questions costs his patience.
 
 READ THE ROOM. When you've dropped a ball — missed a reminder, closed the wrong item, got
 something wrong — acknowledge it plainly and own it; do NOT be chipper, do NOT tack on
@@ -380,7 +383,13 @@ def build_system_message() -> SystemMessage:
     """System message as two blocks: a cache_control-marked STABLE block (cached across
     turns with the tool schemas — the big cost saver) and a tiny VOLATILE block holding
     the live timestamp after the cache breakpoint, so the clock can't bust the cache."""
-    now = datetime.now().strftime('%A, %Y-%m-%d %H:%M:%S')
+    clock = datetime.now()
+    now = clock.strftime('%A, %Y-%m-%d %H:%M:%S')
+    # At 4 AM "this needs to happen tomorrow" was filed for the day after the one he
+    # meant: he hadn't slept, so his tomorrow was the day already begun.
+    small_hours = (f" It's the small hours: the user likely hasn't slept yet, so their \"tomorrow\" "
+                   f"means today ({clock:%A %Y-%m-%d}) and \"tonight\" means now; name the "
+                   f"date you used." if clock.hour < 5 else "")
     # 1h cache TTL (vs the 5-min default) survives the gaps between sparse, bursty
     # assistant interactions — the dominant cause of cache misses for personal use.
     # Reads stay ~0.1x; the write premium (2x vs 1.25x) pays off after one re-hit/hour.
@@ -408,7 +417,8 @@ def build_system_message() -> SystemMessage:
                  f"(e.g. computing a commitment's date from 'tomorrow' or 'Friday'). This "
                  f"clock is always right — never ask the user what today's date is. A bare "
                  f"weekday means the next "
-                 f"one that hasn't passed (on a Friday, \"Monday\" is 3 days out)."},
+                 f"one that hasn't passed (on a Friday, \"Monday\" is 3 days out)."
+                 f"{small_hours}"},
     ])
 
 

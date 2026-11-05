@@ -236,7 +236,7 @@ Conversation before this turn:
 The user's message this turn:
 {user}
 
-Tools Aria called this turn:
+Tools Aria called this turn, each with what it returned:
 {calls}
 
 Commitment store after the turn:
@@ -258,7 +258,9 @@ def run_judge(rubric, why, history, user, calls, db, reply, tier="standard"):
         why=why or "(none)",
         history="\n".join(f"User: {u}\nAria: {a}" for u, a in history) or "(none)",
         user=user,
-        calls="\n".join(f"- {c['tool']}({_fmt_args(c['args'])})" for c in calls) or "(none)",
+        calls="\n".join(f"- {c['tool']}({_fmt_args(c['args'])})"
+                        + (f"\n  returned: {c['output']}" if c.get("output") else "")
+                        for c in calls) or "(none)",
         db="\n".join(f"- #{r['id']} {r['description']} [{r['status']}] due={r['due_date']} "
                      f"{r['due_time'] or ''}".rstrip() for r in db) or "(empty)",
         reply=reply, rubric=rubric)

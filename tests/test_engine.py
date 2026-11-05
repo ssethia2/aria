@@ -511,6 +511,22 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
             rules=["Never track apartment emails as reply-owed commitments."])
         self.assertIn("Never track apartment emails as reply-owed commitments.", prompt)
 
+    def test_screener_knows_when_he_is_already_in_the_thread(self):
+        # A recruiter he'd been writing to for a week was digested as "cold outreach he can
+        # ignore per standing rules" — there was no such rule, and he'd replied.
+        threads = MagicMock()
+        threads.get.return_value.execute.return_value = {
+            'messages': [{'labelIds': ['INBOX']}, {'labelIds': ['SENT']}]}
+        service = MagicMock()
+        service.users.return_value.threads.return_value = threads
+        self.assertTrue(EmailDigestMonitor._he_replied(service, 't1'))
+        threads.get.return_value.execute.return_value = {'messages': [{'labelIds': ['INBOX']}]}
+        self.assertFalse(EmailDigestMonitor._he_replied(service, 't1'))
+        self.assertFalse(EmailDigestMonitor._he_replied(None, 't1'))
+        _, _, _, prompt = self._screen_one("RE: Acme recruiting", "Kim <kim@acme.com>", '[]')
+        self.assertIn('"he_replied_in_thread"', prompt)
+        self.assertIn("Never cite", prompt)
+
     def test_rule_asked_alert_goes_out_now_not_in_the_digest(self):
         """'Alert me right away about interview invites' was saved, then never honored."""
         out, state, _, _ = self._screen_one(

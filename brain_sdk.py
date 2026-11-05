@@ -23,6 +23,8 @@ to serve get_state/update_state (the fast-path's context + persistence).
 """
 import os
 import json
+import re
+import shutil
 import threading
 from datetime import date, datetime
 from pathlib import Path
@@ -65,6 +67,17 @@ def _clean_env() -> dict:
     return env
 
 
+def _cli_path():
+    """The installed Claude Code, which updates itself, over the SDK's bundled copy, which
+    is frozen at the SDK's release: bundled 2.1.207 refused Opus 5.5 and resolved "sonnet"
+    to an older Sonnet. ARIA_CLAUDE_CLI overrides; None falls back to the bundled CLI."""
+    for path in (os.getenv("ARIA_CLAUDE_CLI"), shutil.which("claude"),
+                 os.path.expanduser("~/.local/bin/claude")):     # launchd's PATH is bare
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
+
+
 class BrainUnavailable(Exception):
     """The subscription turn produced no usable reply (rate limit, CLI/auth failure) —
     the caller should serve this turn from the API fallback agent instead of dying."""
@@ -96,6 +109,42 @@ def _recent_context(thread_id: str, limit: int = CONTEXT_TURNS) -> str:
         who = "User" if m.get("type") == "human" else "Aria"
         return f"{when}{who}: {(m.get('content') or '')[:400]}"
     return "\n".join(line(m) for m in mirror[-limit:])
+
+
+def _words(text: str) -> set:
+    return set(re.findall(r"[a-z']{3,}", text.lower()))
+
+
+def _join_reply(texts: list) -> str:
+    """Every text block in order, minus one a later block restates. She'd answer, save a
+    memory, then answer again ("Good to know — I'll stop treating…" / "Noted — I'll stop
+    flagging…"), and he got both."""
+    kept = []
+    for text in texts:
+        new = _words(text)
+        kept = [k for k in kept
+                if not (new and _words(k) and
+                        len(_words(k) & new) / min(len(_words(k)), len(new)) >= 0.5)]
+        kept.append(text)
+    return "\n\n".join(kept)
+
+
+def _recall(text: str) -> str:
+    try:
+        import memory
+        return memory.recall(text)
+    except Exception as e:
+        print(f"[brain] recall failed: {e}")
+        return ""
+
+
+def _remember(user_text: str, reply: str):
+    """Into tonight's compaction, so it outlives today's session (memory.log_exchange)."""
+    try:
+        from memory import log_exchange
+        log_exchange(user_text, reply)
+    except Exception as e:
+        print(f"[brain] couldn't log exchange for memory: {e}")
 
 
 def _queue_unsynced(thread_id: str, user_text: str, reply: str):
@@ -242,6 +291,7 @@ class SubscriptionBrain:
             skills=[],
             permission_mode="bypassPermissions",   # unattended tool runs (same as LangGraph)
             model=MODEL,
+            cli_path=_cli_path(),
             max_turns=MAX_TURNS,
             env=_clean_env(),
             cwd=os.path.dirname(__file__),
@@ -292,11 +342,25 @@ class SubscriptionBrain:
                       f"messages after your last exchange — he may be replying to one:\n"
                       f"{sent}</sent_since_your_last_turn>\n\n{prompt}")
 
+        remembered = _recall(text)
+        if remembered:
+            prompt = (f"<what_you_remember>Things you already know that may bear on this "
+                      f"(dated; when two conflict, the newer wins). Use them before searching "
+                      f"email, and don't recite them back unasked:\n{remembered}"
+                      f"</what_you_remember>\n\n{prompt}")
+
         result = {"reply": None, "session_id": session}
         texts = []
 
+        # Built BEFORE the key comes out of the env: building it imports agent_core, and a
+        # module's load_dotenv() on first import put the key straight back (a fresh
+        # process's first turn billed the API).
+        opts = self._options(resume=session)
+
         async def go():
-            opts = self._options(resume=session)
+            # And again at the spawn itself, in case any first import since (another
+            # thread's included) re-loaded .env.
+            os.environ.pop("ANTHROPIC_API_KEY", None)
             async for msg in query(prompt=prompt, options=opts):
                 t = type(msg).__name__
                 if t == "SystemMessage" and getattr(msg, "subtype", "") == "init":
@@ -313,7 +377,7 @@ class SubscriptionBrain:
                             # "Marked it done" when she went on to check something and wrote
                             # "Also — Acme wants an interview" after the tool call.
                             texts.append(b.text.strip())
-                            result["reply"] = "\n\n".join(texts)
+                            result["reply"] = _join_reply(texts)
                         name = getattr(b, "name", None)
                         if name and on_tool:
                             on_tool(name.replace("mcp__aria__", ""))
@@ -364,6 +428,7 @@ class SubscriptionBrain:
             mirror.extend([_mirror_entry("human", text), _mirror_entry("ai", reply)])
             th["messages"] = mirror[-MIRROR_MAX:]
             _save_state(state)
+        _remember(text, reply)
         return reply
 
     @staticmethod
@@ -483,3 +548,7 @@ class SubscriptionBrain:
                 # it rides into the next turn's prompt (_run_turn).
                 th["notes"] = (th.get("notes", []) + entries)[-8:]
             _save_state(state)
+        # A fallback or quick-path exchange is still a conversation worth remembering.
+        for said, answered in zip(entries, entries[1:]):
+            if said["type"] == "human" and answered["type"] == "ai":
+                _remember(said["content"], answered["content"])

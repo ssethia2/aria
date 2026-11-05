@@ -32,10 +32,10 @@ The chat agent's large, stable system+tools prefix is **prompt-cached** (the liv
 
 Two tiers over a static profile — see [ADR 0002](adr/0002-3tier-memory.md) and [ADR 0008](adr/0008-retire-cold-storage-tier.md), which retired the original cold-storage tier:
 
-1. **Tier 1 — working memory.** `add_memory` appends raw facts to `daily_scratchpad.txt` instantly (no embedding on the hot path).
-2. **Tier 2 — semantic memory.** `nightly_compaction.py` LLM-distills the scratchpad into durable facts and stores them in ChromaDB (`chroma_db/`) via `memory.store_facts()`, each dated by when it was noted, then wipes the scratchpad. The distillation **filters**: facts about the user are kept; operational log lines (engine actions, fired reminders) are discarded. The store is uncapped — nothing is summarized away.
+1. **Tier 1 — working memory.** `add_memory` appends raw facts to `daily_scratchpad.txt` instantly (no embedding on the hot path), and every exchange with the owner is appended to `daily_conversation.jsonl` ([ADR 0010](adr/0010-conversations-are-memory.md)).
+2. **Tier 2 — semantic memory.** `nightly_compaction.py` LLM-distills the scratchpad and the day's conversations into durable facts and stores them in ChromaDB (`chroma_db/`) via `memory.store_facts()`, each dated by when it was noted, then wipes the scratchpad. The distillation **filters**: facts about the user are kept; operational log lines (engine actions, fired reminders) are discarded. The store is uncapped — nothing is summarized away.
 
-`search_memory` reads Tier 1 plus the top 5 Tier-2 matches, each shown with its date so the newer of two conflicting facts wins. `profile.json` is static identity.
+Each substantive owner message reaches the brain with `memory.recall()` prepended (dated matches, no tool call needed). `search_memory` reads Tier 1 (the scratchpad, plus logged exchanges that match the query) plus the top 5 Tier-2 matches, each shown with its date so the newer of two conflicting facts wins. `profile.json` is static identity.
 
 ### People model (`people.py`)
 People are first-class records (name, relation, aliases, birthday, notes), not loose facts. `remember_person` / `get_person` / `list_people` are agent tools; saving a birthday auto-creates a yearly `people_date` commitment. Stored in `people.json`.

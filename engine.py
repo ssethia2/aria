@@ -235,9 +235,11 @@ moving: a friend or family member, someone he's planning something with, or a pe
 business answering an inquiry HE started (a venue, a service, a company in a process he
 began).
 needs_reply = FALSE for:
-- solicitations he can ignore: cold outreach, recruiters and agencies (including their
-  follow-ups and "bumps" on a thread he never answered), focus groups, surveys, sales,
-  events he didn't initiate — EVEN when phrased as a question from a real person;
+- solicitations he can ignore: cold outreach, recruiters and agencies he hasn't engaged
+  (including their follow-ups and "bumps" on a thread he never answered), focus groups,
+  surveys, sales, events he didn't initiate — EVEN when phrased as a question from a real
+  person. When "he_replied_in_thread" is true he is IN a process with this sender: a
+  recruiter scheduling his interviews is a real correspondent, never cold outreach;
 - automated notices: bank/card alerts, booking or order confirmations and changes,
   verify-your-account, shipping, e-signature requests, forms to fill out, platform
   notifications — a machine sent them; no human is waiting on a reply;
@@ -252,6 +254,10 @@ this kind of email.
 
 Emails (JSON):
 {emails}
+
+The reason is read by him: say what the email is and why it matters, in plain words.
+Never cite "standing rules" or rule numbers, and never call something ignorable because
+of a rule that doesn't say so.
 
 Return ONLY a raw JSON array (no markdown), one object per flagged email:
 [{{"id": "<email id>", "reason": "<one short sentence; say if it may need a reply>", "needs_reply": true/false, "alert_now": true/false}}]
@@ -408,6 +414,20 @@ Return [] if none — that should be the common case."""
                 f"({source}: “{email['subject']}”). If that's wrong, say so and I'll reopen it."))
         return notes
 
+    @staticmethod
+    def _he_replied(service, thread_id) -> bool:
+        """Has he sent anything on this thread? A recruiter he'd been writing to for a week
+        was digested as "cold outreach he can ignore": the screener couldn't tell a bump on
+        an ignored thread from a process he's in."""
+        if not (service and thread_id):
+            return False
+        try:
+            thread = service.users().threads().get(
+                userId='me', id=thread_id, format='minimal').execute()
+            return any('SENT' in (m.get('labelIds') or []) for m in thread.get('messages', []))
+        except Exception:
+            return False
+
     def _screen_new_mail(self, state: dict):
         import email_backend
         from skills.email_manager import get_gmail_service
@@ -437,6 +457,7 @@ Return [] if none — that should be the common case."""
                     'snippet': msg.get('snippet', ''),
                     'list_unsubscribe': next(
                         (h['value'] for h in headers if h['name'].lower() == 'list-unsubscribe'), ''),
+                    'thread_id': msg.get('threadId'),
                 })
 
         new = [e for e in fetched if e['id'] not in seen]
@@ -454,6 +475,9 @@ Return [] if none — that should be the common case."""
         if not emails:
             return []
 
+        for e in emails:
+            e['he_replied_in_thread'] = self._he_replied(
+                service if not email_backend.using_app_password() else None, e.pop('thread_id', None))
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
         # His standing rules ("never track apartment emails as replies owed", "alert me right
         # away about interview invites") used to reach only the chat agent, so the screener

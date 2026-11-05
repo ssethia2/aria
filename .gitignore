@@ -38,6 +38,7 @@ reports/
 chroma_db/
 cold_storage/
 daily_scratchpad.txt
+daily_conversation.jsonl
 *.db
 *.db-shm
 *.db-wal

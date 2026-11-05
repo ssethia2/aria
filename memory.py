@@ -1,6 +1,7 @@
 """Memory layer + LangChain memory tools (see docs/adr/0002, and 0008 which retired Tier 3).
 
-Tier 0: static profile.json. Tier 1: daily_scratchpad.txt (add_memory).
+Tier 0: static profile.json. Tier 1: daily_scratchpad.txt (add_memory) and
+daily_conversation.jsonl (every exchange with the owner, logged by brain_sdk).
 Tier 2: ChromaDB semantic store (search_memory) — every durable fact, dated, uncapped.
 nightly_compaction.py moves Tier 1 into Tier 2 via store_facts().
 """
@@ -24,6 +25,7 @@ load_dotenv()
 PROFILE_PATH = os.path.join(os.path.dirname(__file__), "profile.json")
 DB_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
 SCRATCHPAD_PATH = os.path.join(os.path.dirname(__file__), "daily_scratchpad.txt")
+CONVERSATION_PATH = os.path.join(os.path.dirname(__file__), "daily_conversation.jsonl")
 
 # --- Layer 1: Core Identity (Static Profile) ---
 
@@ -95,6 +97,76 @@ def _add_memory(fact: str) -> str:
         return f"Successfully remembered in working memory: {fact}"
     except Exception as e:
         return f"Failed to add memory: {str(e)}"
+
+
+def log_exchange(user_text: str, reply: str, when=None):
+    """Keep one exchange with the owner for tonight's compaction. Before this, only what
+    she chose to add_memory outlived a session: a trip itinerary he walked her through,
+    flight numbers pasted in by hand, was gone two days later."""
+    if is_guest() or not (user_text or "").strip():
+        return
+    when = when or datetime.datetime.now()
+    try:
+        with open(CONVERSATION_PATH, "a") as f:
+            f.write(json.dumps({"at": when.isoformat(timespec="minutes"),
+                                "user": user_text.strip(), "aria": (reply or "").strip()}) + "\n")
+    except Exception as e:
+        print(f"[memory] couldn't log exchange: {e}")
+
+
+def load_exchanges(path=None) -> list:
+    try:
+        with open(path or CONVERSATION_PATH) as f:
+            return [json.loads(line) for line in f if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+_STOP = {"what", "when", "where", "which", "with", "from", "that", "this", "have", "about",
+         "your", "does", "into", "were", "they", "them", "there", "booking", "details",
+         "confirmation"}
+
+
+def _matching_exchanges(query: str, limit: int = 3, min_hits: int = 1) -> list:
+    """Not-yet-compacted exchanges that share the most words with the query, newest first
+    among equals — the stretch between a session ending and tonight's compaction."""
+    words = {w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) >= 3} - _STOP
+    if not words:
+        return []
+    scored = []
+    for i, ex in enumerate(load_exchanges()):
+        text = f"{ex.get('user', '')} {ex.get('aria', '')}".lower()
+        hits = sum(1 for w in words if re.search(rf"\b{re.escape(w)}", text))
+        if hits >= min_hits:
+            scored.append((hits, i, ex))
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [ex for _, _, ex in scored[:limit]]
+
+
+def recall(message: str, n_results: int = 5) -> str:
+    """What she'd remember unprompted on hearing this message: dated semantic matches plus
+    not-yet-compacted exchanges. Given the trip in memory, she still never searched it: she
+    went to email, found an unreadable confirmation, and guessed. "" when there's nothing,
+    or the message is too thin to search on ("yes please")."""
+    if is_guest():
+        return ""
+    words = {w for w in re.findall(r"[a-z0-9]+", (message or "").lower()) if len(w) >= 4} - _STOP
+    if len(words) < 2:
+        return ""
+    lines = [f"- [{ex.get('at', '?')}] he said: {ex.get('user', '')[:600]} / you said: "
+             f"{ex.get('aria', '')[:600]}" for ex in _matching_exchanges(message, 2, min_hits=2)]
+    if collection is not None and embeddings is not None:
+        try:
+            res = collection.query(query_embeddings=[embeddings.embed_query(message)],
+                                   n_results=n_results)
+            docs = (res.get('documents') or [[]])[0]
+            metas = (res.get('metadatas') or [[]])[0] or []
+            for i, doc in enumerate(docs):
+                added = (metas[i] or {}).get("added") if i < len(metas) else None
+                lines.append(f"- {doc}" + (f" (noted {added})" if added else ""))
+        except Exception as e:
+            print(f"[memory] recall failed: {e}")
+    return "\n".join(lines)
 
 
 @tool
@@ -209,6 +281,15 @@ def _search_memory(query: str, n_results: int = 5) -> str:
                     output.append(f"- {line}")
                 output.append("") # spacer
                 
+    # 1b. Earlier conversations not yet compacted (a new day's session can't see them)
+    matches = _matching_exchanges(query)
+    if matches:
+        output.append("Earlier conversation (not yet in long-term memory):")
+        for ex in matches:
+            output.append(f"- [{ex.get('at', '?')}] User: {ex.get('user', '')[:1500]}\n"
+                          f"  Aria: {ex.get('aria', '')[:1500]}")
+        output.append("")
+
     # 2. Short-Term/Pointer Memory (ChromaDB)
     if collection is not None:
         try:

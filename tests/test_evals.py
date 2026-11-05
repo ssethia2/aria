@@ -220,10 +220,10 @@ class TestSandbox(unittest.TestCase):
         from skills import commitment_manager as cm
         import instructions, people, memory
         real_paths = (cm.DB_PATH, instructions.INSTRUCTIONS_PATH, people.PEOPLE_PATH,
-                      memory.PROFILE_PATH)
+                      memory.PROFILE_PATH, memory.CONVERSATION_PATH, memory.SCRATCHPAD_PATH)
         with Sandbox() as sb:
             for p in (cm.DB_PATH, instructions.INSTRUCTIONS_PATH, people.PEOPLE_PATH,
-                      memory.PROFILE_PATH):
+                      memory.PROFILE_PATH, memory.CONVERSATION_PATH, memory.SCRATCHPAD_PATH):
                 self.assertTrue(p.startswith(sb.dir), p)
             tools = {t.name: t for t in sb.tools}
             out = tools["add_commitment"].invoke({"description": "call mom",
@@ -235,7 +235,8 @@ class TestSandbox(unittest.TestCase):
             self.assertEqual(sb.calls[-1]["args"]["due_date_iso"], "2026-10-20")
             tmp = sb.dir
         self.assertEqual((cm.DB_PATH, instructions.INSTRUCTIONS_PATH, people.PEOPLE_PATH,
-                          memory.PROFILE_PATH), real_paths)       # restored on exit
+                          memory.PROFILE_PATH, memory.CONVERSATION_PATH,
+                          memory.SCRATCHPAD_PATH), real_paths)    # restored on exit
         self.assertFalse(os.path.exists(tmp))                     # temp state removed
 
     def test_faked_tools_never_reach_their_implementation(self):

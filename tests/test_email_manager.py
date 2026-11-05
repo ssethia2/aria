@@ -217,6 +217,20 @@ class TestReadEmailThread(unittest.TestCase):
         html_only = {'mimeType': 'text/html', 'body': {'data': _b64('<b>Hello</b> there')}}
         self.assertIn('Hello', email_manager._body_text(html_only))
 
+    def test_booking_html_reads_as_text(self):
+        # A travel site's HTML-only mail with CSS in <style>; an airline's plain part that's padding.
+        page = ('<html><head><style>@font-face { font-family: X; }</style></head><body>'
+                '<table><tr><td>Sat, 14 Nov</td><td>11:55</td><td>LIS</td></tr>'
+                '<tr><td>TP202</td></tr></table></body></html>')
+        html_only = {'mimeType': 'text/html', 'body': {'data': _b64(page)}}
+        text = email_manager._body_text(html_only)
+        self.assertNotIn('font-face', text)
+        self.assertIn('Sat, 14 Nov\n11:55\nLIS\nTP202', text)
+        padded = {'mimeType': 'multipart/alternative', 'parts': [
+            {'mimeType': 'text/plain', 'body': {'data': _b64('Your trip ' + '&zwnj;&nbsp;' * 80)}},
+            {'mimeType': 'text/html', 'body': {'data': _b64(page)}}]}
+        self.assertIn('TP202', email_manager._body_text(padded))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -34,9 +34,11 @@ class StoreCase(unittest.TestCase):
         fd, missing = tempfile.mkstemp()
         os.close(fd)
         os.unlink(missing)                      # a scratchpad path that doesn't exist
+        self.convo = missing + ".jsonl"
         self.patches = [patch.object(memory, "collection", self.col),
                         patch.object(memory, "embeddings", emb),
-                        patch.object(memory, "SCRATCHPAD_PATH", missing)]
+                        patch.object(memory, "SCRATCHPAD_PATH", missing),
+                        patch.object(memory, "CONVERSATION_PATH", self.convo)]
         for p in self.patches:
             p.start()
         self.emb = emb
@@ -44,6 +46,8 @@ class StoreCase(unittest.TestCase):
     def tearDown(self):
         for p in reversed(self.patches):
             p.stop()
+        if os.path.exists(self.convo):
+            os.unlink(self.convo)
 
 
 class TestStoreFacts(StoreCase):
@@ -198,6 +202,33 @@ class TestImportColdStorage(StoreCase):
         import_cold_storage.main([])                                # rerun finishes the job
         self.assertEqual(self.col.count(), 5)
         self.assertNotIn(self.POINTER, self._docs())
+
+
+class TestRecall(StoreCase):
+    def test_stored_facts_and_matching_chat_come_back_dated(self):
+        memory.store_facts(["Porto to Lisbon on Nov 27 is TP 202 on the TravelCo booking."],
+                           added="2026-11-03")
+        memory.log_exchange("Change the Porto Lisbon flight?", "That's TP 202.")
+        out = memory.recall("I need to change my flight from Porto to Lisbon")
+        self.assertIn("TP 202 on the TravelCo booking. (noted 2026-11-03)", out)
+        self.assertIn("he said: Change the Porto Lisbon flight?", out)
+
+    def test_thin_messages_skip_the_lookup(self):
+        memory.store_facts(["Sam likes espresso."], added="2026-10-01")
+        self.emb.embed_query.reset_mock()
+        self.assertEqual(memory.recall("yes please"), "")
+        self.emb.embed_query.assert_not_called()
+
+
+class TestConversationRecall(StoreCase):
+    def test_todays_conversation_answers_before_compaction(self):
+        # A new day's session at 4am couldn't see the itinerary from the night before.
+        memory.log_exchange("Outbound: TP 202 Porto to Lisbon, Nov 14 1pm", "Added.")
+        memory.log_exchange("Acme interview Friday?", "10 AM.")
+        out = memory._search_memory("flight from Porto to Lisbon")
+        self.assertIn("Earlier conversation", out)
+        self.assertIn("TP 202", out)
+        self.assertNotIn("Acme", out)
 
 
 if __name__ == "__main__":
