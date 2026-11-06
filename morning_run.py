@@ -82,6 +82,8 @@ def run():
 def main(force=False):
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+    import redact
+    redact.install()
     at = due()
     if at is None and not force:
         return

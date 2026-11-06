@@ -63,6 +63,8 @@ def _friendly_action(tool_name: str) -> str:
     return '⚙️ Working on it…'
 
 load_dotenv()
+import redact
+redact.install()        # the token is in every Bot API URL, and so in its errors
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API = f"https://api.telegram.org/bot{TOKEN}"

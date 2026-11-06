@@ -33,6 +33,8 @@ from imessage_send import send_imessage
 from imessage_reader import latest_rowid, fetch_new
 
 load_dotenv()
+import redact
+redact.install()
 
 POLL_SECONDS = float(os.getenv("IMESSAGE_POLL_SECONDS", "2"))
 # Progress-note verbosity: "first" (one note per turn, default), "all" (one per tool
