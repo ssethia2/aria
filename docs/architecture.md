@@ -85,6 +85,7 @@ voice.py                 Local voice REPL (on-device Whisper STT + say/piper TTS
 voice_live.py            Realtime Gemini Live voice (barge-in; escalate_to_aria → brain)
 voice_aec.py             Optional speexdsp echo cancellation for voice_live
 webvoice/                Browser/phone voice client (Live in-browser) + FastAPI backend
+smartalarm/              Apple Watch smart alarm (Swift watch app + Mac-tested core package)
 main.py / morning_run.py Scheduled briefing (fail-loud delivery)
 llm_router.py            Tiered, fallback-aware model factory
 memory.py                Profile + ChromaDB semantic memory + memory tools

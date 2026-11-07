@@ -10,6 +10,7 @@ Guidance for Claude Code working in this repo. Aria is a modular personal AI ass
 - **[context/implementation_plan.md](context/implementation_plan.md)** — design rationale, phased (dated) roadmap.
 - **[context/task.md](context/task.md)** — task checklist / current status.
 - **[docs/adr/](docs/adr/)** — immutable decision records (model router, memory, Gmail security).
+- **[smartalarm/](smartalarm/README.md)** — Apple Watch smart alarm (Swift, standalone from the agent). Core logic tests: `cd smartalarm/SmartAlarmCore && swift test`.
 
 ## Run / dev commands
 ```bash

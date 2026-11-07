@@ -1,0 +1,48 @@
+# XcodeGen spec. The generated SmartAlarm.xcodeproj is committed too, so XcodeGen is
+# only needed after changing this file: `xcodegen generate` in this directory.
+name: SmartAlarm
+options:
+  bundleIdPrefix: com.ssethia2.aria
+  deploymentTarget:
+    watchOS: "10.0"
+packages:
+  SmartAlarmCore:
+    path: SmartAlarmCore
+targets:
+  SmartAlarm:
+    type: application
+    platform: watchOS
+    sources:
+      - SmartAlarm
+    dependencies:
+      - package: SmartAlarmCore
+    info:
+      path: SmartAlarm/Info.plist
+      properties:
+        CFBundleDisplayName: Smart Alarm
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        WKApplication: true
+        WKWatchOnly: true
+        # One extended-runtime mode (the smart alarm) plus workouts for the long window.
+        WKBackgroundModes:
+          - alarm
+          - workout-processing
+        NSHealthShareUsageDescription: Reads your heart rate overnight and Apple's sleep stages the morning after, to choose when to wake you.
+        NSHealthUpdateUsageDescription: Runs an overnight workout session so the app can watch your heart rate. The workout is discarded, never saved.
+        NSMotionUsageDescription: Watches wrist movement overnight to tell when you're sleeping lightly.
+    entitlements:
+      path: SmartAlarm/SmartAlarm.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ssethia2.aria.smartalarm
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        # Set your team in Xcode (Signing & Capabilities) or here.
+        DEVELOPMENT_TEAM: ""

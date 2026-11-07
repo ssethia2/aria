@@ -1,0 +1,372 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		22043F30C900F34A16D394D2 /* AlarmController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AFB064987DA4FD4B5F14698 /* AlarmController.swift */; };
+		607C9C3533A59CA643CDD391 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAD706BEF3E01DC3D6476503 /* HistoryView.swift */; };
+		9095A4B734CD7D884EF8C1ED /* SmartAlarmApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6CD73B8F86F653D74C68FFC /* SmartAlarmApp.swift */; };
+		9A45AB1D2070F1C65B6A6CA5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 66C0E579FF3AE73F45C0A7D8 /* Assets.xcassets */; };
+		E315B07F3FCD4BBFBAF93BE6 /* SensorMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76EB92F22D65E25F1B75C545 /* SensorMonitor.swift */; };
+		E433DCB740DD8087DD8626B6 /* SmartAlarmCore in Frameworks */ = {isa = PBXBuildFile; productRef = 4F33002335FA550FCB0095D7 /* SmartAlarmCore */; };
+		F61467CB3C62B75676F448FC /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 687F84CBC1CB76D6555AFBAD /* ContentView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		3A2D42592C2C4BDF463F0FE5 /* SmartAlarmCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SmartAlarmCore; path = SmartAlarmCore; sourceTree = SOURCE_ROOT; };
+		5AFB064987DA4FD4B5F14698 /* AlarmController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmController.swift; sourceTree = "<group>"; };
+		66C0E579FF3AE73F45C0A7D8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		687F84CBC1CB76D6555AFBAD /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		76EB92F22D65E25F1B75C545 /* SensorMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorMonitor.swift; sourceTree = "<group>"; };
+		A6CD73B8F86F653D74C68FFC /* SmartAlarmApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SmartAlarmApp.swift; sourceTree = "<group>"; };
+		DA748CDF5DC4890AB66C2037 /* SmartAlarm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SmartAlarm.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DFB1B10AFACC776B877A4F1C /* SmartAlarm.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SmartAlarm.entitlements; sourceTree = "<group>"; };
+		EAD706BEF3E01DC3D6476503 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		F99D925EA181AF883AE35B4E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4EA829DACF099D0691577F58 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E433DCB740DD8087DD8626B6 /* SmartAlarmCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1FF0D367BE7AF7E16A567CBA /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				687F84CBC1CB76D6555AFBAD /* ContentView.swift */,
+				EAD706BEF3E01DC3D6476503 /* HistoryView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		9CA25A9C496A181C5D9F74F4 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				3A2D42592C2C4BDF463F0FE5 /* SmartAlarmCore */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		B464C68EEF36462E5FCC1B1C = {
+			isa = PBXGroup;
+			children = (
+				9CA25A9C496A181C5D9F74F4 /* Packages */,
+				CDA1950065D98463A2466BCE /* SmartAlarm */,
+				FA4D37D660601BC5F5AFD0D6 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		CDA1950065D98463A2466BCE /* SmartAlarm */ = {
+			isa = PBXGroup;
+			children = (
+				5AFB064987DA4FD4B5F14698 /* AlarmController.swift */,
+				66C0E579FF3AE73F45C0A7D8 /* Assets.xcassets */,
+				F99D925EA181AF883AE35B4E /* Info.plist */,
+				76EB92F22D65E25F1B75C545 /* SensorMonitor.swift */,
+				DFB1B10AFACC776B877A4F1C /* SmartAlarm.entitlements */,
+				A6CD73B8F86F653D74C68FFC /* SmartAlarmApp.swift */,
+				1FF0D367BE7AF7E16A567CBA /* Views */,
+			);
+			path = SmartAlarm;
+			sourceTree = "<group>";
+		};
+		FA4D37D660601BC5F5AFD0D6 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DA748CDF5DC4890AB66C2037 /* SmartAlarm.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CF55EF33143D3A59C6AE38EF /* SmartAlarm */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 741BFBFEB76A55A2746AAD83 /* Build configuration list for PBXNativeTarget "SmartAlarm" */;
+			buildPhases = (
+				4145D9F60DE78BBB229D69EB /* Sources */,
+				A5DF849AF11B0B2A659A7FDB /* Resources */,
+				4EA829DACF099D0691577F58 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SmartAlarm;
+			packageProductDependencies = (
+				4F33002335FA550FCB0095D7 /* SmartAlarmCore */,
+			);
+			productName = SmartAlarm;
+			productReference = DA748CDF5DC4890AB66C2037 /* SmartAlarm.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		95AEA55A3EBC4CA0ECC9E023 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					CF55EF33143D3A59C6AE38EF = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 6C83F056BEF817D667920BEF /* Build configuration list for PBXProject "SmartAlarm" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = B464C68EEF36462E5FCC1B1C;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				3850DD225E74AEBCD4CE583B /* XCLocalSwiftPackageReference "SmartAlarmCore" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = FA4D37D660601BC5F5AFD0D6 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CF55EF33143D3A59C6AE38EF /* SmartAlarm */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A5DF849AF11B0B2A659A7FDB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9A45AB1D2070F1C65B6A6CA5 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4145D9F60DE78BBB229D69EB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				22043F30C900F34A16D394D2 /* AlarmController.swift in Sources */,
+				F61467CB3C62B75676F448FC /* ContentView.swift in Sources */,
+				607C9C3533A59CA643CDD391 /* HistoryView.swift in Sources */,
+				E315B07F3FCD4BBFBAF93BE6 /* SensorMonitor.swift in Sources */,
+				9095A4B734CD7D884EF8C1ED /* SmartAlarmApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0FB17592E6E9829FBC56E6EF /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = SmartAlarm/SmartAlarm.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = SmartAlarm/Info.plist;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ssethia2.aria.smartalarm;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Debug;
+		};
+		6BE1694CA6A0855D2EC88F4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		93E9B5C7B67DEC047310DEEC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		99C6F997411050D780E9012C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = SmartAlarm/SmartAlarm.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				INFOPLIST_FILE = SmartAlarm/Info.plist;
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ssethia2.aria.smartalarm;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6C83F056BEF817D667920BEF /* Build configuration list for PBXProject "SmartAlarm" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				93E9B5C7B67DEC047310DEEC /* Debug */,
+				6BE1694CA6A0855D2EC88F4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		741BFBFEB76A55A2746AAD83 /* Build configuration list for PBXNativeTarget "SmartAlarm" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0FB17592E6E9829FBC56E6EF /* Debug */,
+				99C6F997411050D780E9012C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		3850DD225E74AEBCD4CE583B /* XCLocalSwiftPackageReference "SmartAlarmCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = SmartAlarmCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4F33002335FA550FCB0095D7 /* SmartAlarmCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SmartAlarmCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 95AEA55A3EBC4CA0ECC9E023 /* Project object */;
+}
