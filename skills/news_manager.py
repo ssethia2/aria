@@ -117,7 +117,7 @@ def generate_news_brief():
         return None
         
     print("Synthesizing news with AI Router (Opus -> Sonnet -> Gemini)... (This may take a moment)")
-    from llm_router import get_llm
+    from llm_router import get_llm, reply_text
     try:
         llm = get_llm(temperature=0)
     except Exception as e:
@@ -165,11 +165,11 @@ def generate_news_brief():
     response = chain.invoke({"newsletter_data": formatted_data})
     
     try:
-        cleaned_response = response.content.strip().strip('```json').strip('```')
+        cleaned_response = reply_text(response).strip().strip('```json').strip('```')
         brief_topics = json.loads(cleaned_response)
         print(f"✅ Generated brief with {len(brief_topics)} topics.")
         return brief_topics
     except json.JSONDecodeError:
         print("Failed to parse LLM news brief response. Raw output:")
-        print(response.content)
+        print(reply_text(response))
         return None

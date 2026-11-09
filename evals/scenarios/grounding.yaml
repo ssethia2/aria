@@ -16,11 +16,11 @@
 - id: reminder-time-followup
   why: "Referential follow-ups ('what time was that?') must escalate past the fast path and be answered from the store — the fast path once guessed times from a partial snippet."
   turns:
-    - user: "Remind me to call the bank tomorrow at 5pm."
+    - user: "Remind me to call the bank {{weekday:today+2}} at 5pm."
       expect:
         called: [add_commitment]
         called_with:
-          add_commitment: {due_date_iso: "{{today+1}}", due_time: {time: "17:00"}}
+          add_commitment: {due_date_iso: "{{today+2}}", due_time: {time: "17:00"}}
     - user: "Wait, what time did I say?"
       expect:
         path: agent

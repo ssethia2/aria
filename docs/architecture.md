@@ -22,11 +22,13 @@ New interfaces and skills build on `agent_core.py`; new monitors subclass `Monit
 
 `get_llm(tier=...)` returns a LangChain chat model with a built-in fallback chain (LangChain `.with_fallbacks()`), so a rate-limit or outage degrades instead of breaking. Three tiers map model strength to task:
 
-- **heavy** — Opus → Sonnet → Gemini — agentic multi-step work (the browser)
-- **standard** — Sonnet → Opus → Gemini — the chat agent, insight, news, compaction
-- **light** — Gemini (free tier) → Haiku — high-frequency screening; leads with the free model and falls to cheap paid Haiku when it 429s
+- **heavy** — Opus 5.5 → Sonnet 5.5 → Gemini — the owner's API chat agent (the subscription brain's stand-in, so the same model) and the browser
+- **standard** — Sonnet 5.5 → Opus 5.5 → Gemini — guests' chat agent, news, compaction, photos
+- **light** — Haiku 5.5 → Gemini (free tier) — the background judges (email screening, heads-ups, nudges, reflections) and the chat fast path
 
-The chat agent's large, stable system+tools prefix is **prompt-cached** (the live timestamp is isolated in an uncached block so it can't bust the cache), cutting input cost dramatically on multi-turn chats. When a chain link starts failing, the user is alerted on Telegram once per model per day (except the light tier, whose free-primary is *expected* to fall through daily). See [ADR 0001](adr/0001-claude-gemini-fallback.md).
+The 5.5 models think before answering, so a reply can start with thinking blocks: read replies with `reply_text()`, never `.content` as a string. The API agent rebuilds its system prompt on every call, which changes the prefix a replayed thinking block is bound to, so the router asks the API to drop such a block rather than reject the request (`prefix_mismatch_behavior: drop_block`).
+
+The chat agent's large, stable system+tools prefix is **prompt-cached** (the live timestamp is isolated in an uncached block so it can't bust the cache), cutting input cost dramatically on multi-turn chats. When a chain link starts failing, the user is alerted on Telegram once per model per day (except the light tier, whose fall-through to free Gemini is low-stakes). See [ADR 0001](adr/0001-claude-gemini-fallback.md).
 
 ## Memory (`memory.py` + `nightly_compaction.py`)
 

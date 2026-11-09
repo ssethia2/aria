@@ -21,7 +21,12 @@ KEEP_DAYS = 120          # prune older buckets so the file can't grow unbounded
 
 # $ per 1M tokens (input, output). Gemini runs on the free tier → $0 (the whole point of
 # routing the engine there). Tune via env if your prices change. See the claude-api skill.
+# An optional third value is the cache-read rate where it isn't the usual 0.1x of input.
+# Haiku 5.5's rate is for prompts up to 100K tokens (5x beyond); Aria's prompts stay under.
 PRICES = {
+    "claude-opus-5-5":   (4.0, 20.0, 0.20),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.10),
+    "claude-haiku-5-5":  (0.10, 0.50),
     "claude-opus-4-8":   (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5":  (1.0, 5.0),
@@ -34,11 +39,13 @@ CACHE_WRITE_FACTOR = 2.0
 
 
 def _rates(model: str):
-    """(input, output) $/token for a model id, matched by prefix; (0,0) if unknown."""
-    for key, (pin, pout) in PRICES.items():
+    """(input, output, cache read) $/token for a model id, matched by prefix; zeros if
+    unknown."""
+    for key, (pin, pout, *read) in PRICES.items():
         if model and (model.startswith(key) or key in model):
-            return pin / 1_000_000, pout / 1_000_000
-    return 0.0, 0.0
+            cache_read = read[0] if read else pin * CACHE_READ_FACTOR
+            return pin / 1_000_000, pout / 1_000_000, cache_read / 1_000_000
+    return 0.0, 0.0, 0.0
 
 
 def estimate_cost(model, input_tokens=0, output_tokens=0, cache_read=0, cache_creation=0):
@@ -47,10 +54,10 @@ def estimate_cost(model, input_tokens=0, output_tokens=0, cache_read=0, cache_cr
     input_token_details — so subtract them to get the full-price uncached portion, then bill
     cache reads at 0.1x and writes at the 1h-TTL 2x. (Charging input_tokens in full AND the
     cache tokens again over-counts cached turns ~8x.)"""
-    pin, pout = _rates(model)
+    pin, pout, pread = _rates(model)
     uncached = max(input_tokens - cache_read - cache_creation, 0)
     return round(uncached * pin
-                 + cache_read * pin * CACHE_READ_FACTOR
+                 + cache_read * pread
                  + cache_creation * pin * CACHE_WRITE_FACTOR
                  + output_tokens * pout, 6)
 

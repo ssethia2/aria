@@ -470,7 +470,9 @@ def build_agent(checkpointer=None, guest=False, force_api=False):
             return SubscriptionBrain(tools=build_tools(guest=False))
         except Exception as e:
             print(f"[brain] subscription brain unavailable ({e}); using API brain")
-    llm = get_llm(temperature=0)
+    # The owner's API brain is the subscription brain's stand-in, so it runs the same model
+    # (Sonnet 5.5 over-explained when owning a mistake: 1/4 on the eval vs 3/3).
+    llm = get_llm(temperature=0, tier="standard" if guest else "heavy")
     return create_agent(
         llm,
         build_tools(guest=guest),

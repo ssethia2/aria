@@ -11,6 +11,14 @@ import cost_tracker as ct
 
 
 class TestPricing(unittest.TestCase):
+    def test_current_models_priced(self):
+        self.assertAlmostEqual(ct.estimate_cost("claude-haiku-5-5", 1_000_000, 1_000_000),
+                               0.60, places=4)
+        self.assertAlmostEqual(ct.estimate_cost("claude-sonnet-5-5", 1_000_000, 0), 2.0, places=4)
+        # Sonnet 5.5 cache reads are $0.10/M, half the usual 0.1x of input
+        self.assertAlmostEqual(ct.estimate_cost("claude-sonnet-5-5", 1_000_000, 0,
+                                                cache_read=1_000_000), 0.10, places=4)
+
     def test_opus_input_output_rates(self):
         # 1M input @ $5, 1M output @ $25
         self.assertAlmostEqual(ct.estimate_cost("claude-opus-4-8", 1_000_000, 0), 5.0, places=4)

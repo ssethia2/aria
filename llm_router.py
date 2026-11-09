@@ -4,9 +4,9 @@ Every module gets its model via get_llm(tier=...) — never a provider SDK direc
 tiers, each an ordered chain that falls through on error/rate-limit (LangChain
 .with_fallbacks), so a quota wall or outage degrades instead of breaking:
 
-  heavy    : Opus 4.8 -> Sonnet 4.6 -> Gemini   (agentic multi-step: browser, complex)
-  standard : Sonnet 4.6 -> Opus 4.8 -> Gemini   (chat agent, insight, news, compaction)
-  light    : Haiku 4.5 -> Gemini                (high-frequency screening + the chat
+  heavy    : Opus 5.5 -> Sonnet 5.5 -> Gemini   (agentic multi-step: browser, complex)
+  standard : Sonnet 5.5 -> Opus 5.5 -> Gemini   (chat agent, insight, news, compaction)
+  light    : Haiku 5.5 -> Gemini                (high-frequency screening + the chat
              fast-path: cheap, RELIABLE Haiku first. Gemini's free tier is only a
              fallback — its 20-requests/day cap is far too small to lead with, and
              doing so silently starved the agent down to free-tier scraps.)
@@ -16,7 +16,7 @@ in a chain; the fallback machinery is provider-agnostic.
 
 When a chain link fails at invoke time the user is told via Telegram (once per model per
 day) — EXCEPT the light tier, whose fall-through to free-tier Gemini is low-stakes and
-stays silent. Model lineup current as of 2026-06.
+stays silent. Model lineup current as of 2026-11.
 """
 import json
 import os
@@ -31,17 +31,32 @@ load_dotenv()
 ALERT_STATE_PATH = os.path.join(os.path.dirname(__file__), "router_alerts.json")
 
 
-# --- model factories (Opus 4.8 rejects sampling params, so it ignores temperature) ---
+# --- model factories ---
+# The 5.5 models reject non-default sampling params (temperature only reaches Gemini), and
+# always think (adaptive), so replies start with thinking blocks: read them with reply_text().
+# LangChain has no profile for them and would cap max_tokens at 4096, which thinking eats
+# into. The agent's system prompt is rebuilt every call (fresh clock), which changes the
+# prefix a replayed thinking block is bound to: drop_block lets the API discard such a block
+# instead of rejecting the request.
+_THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
+_BETAS = ["thinking-binding-controls-2026-08-01"]
+
+
+def _claude(model, effort):
+    return ChatAnthropic(model=model, max_tokens=16000, effort=effort,
+                         thinking=_THINKING, betas=_BETAS)
+
+
 def _opus(t):
-    return ChatAnthropic(model="claude-opus-4-8")
+    return _claude("claude-opus-5-5", "high")       # its default is medium
 
 
 def _sonnet(t):
-    return ChatAnthropic(model="claude-sonnet-4-6", temperature=t)
+    return _claude("claude-sonnet-5-5", "high")
 
 
 def _haiku(t):
-    return ChatAnthropic(model="claude-haiku-4-5", temperature=t)
+    return _claude("claude-haiku-5-5", "medium")
 
 
 def _gemini(t):
@@ -49,11 +64,11 @@ def _gemini(t):
 
 
 TIERS = {
-    "heavy":    [("claude-opus-4-8", _opus), ("claude-sonnet-4-6", _sonnet),
+    "heavy":    [("claude-opus-5-5", _opus), ("claude-sonnet-5-5", _sonnet),
                  ("gemini-2.5-flash", _gemini)],
-    "standard": [("claude-sonnet-4-6", _sonnet), ("claude-opus-4-8", _opus),
+    "standard": [("claude-sonnet-5-5", _sonnet), ("claude-opus-5-5", _opus),
                  ("gemini-2.5-flash", _gemini)],
-    "light":    [("claude-haiku-4-5", _haiku), ("gemini-2.5-flash", _gemini)],
+    "light":    [("claude-haiku-5-5", _haiku), ("gemini-2.5-flash", _gemini)],
 }
 
 
@@ -175,12 +190,17 @@ def describe_image(image_bytes: bytes, mime_type: str = "image/jpeg",
          "image_url": {"url": f"data:{mime_type};base64,"
                               f"{base64.b64encode(image_bytes).decode()}"}},
     ])
-    resp = get_llm(tier="standard").invoke([msg])
-    content = resp.content
+    return reply_text(get_llm(tier="standard").invoke([msg])).strip()
+
+
+def reply_text(response) -> str:
+    """The text of a model reply. Claude replies are often a list of blocks (thinking first
+    on the 5.5 models); Gemini's are usually a plain string."""
+    content = getattr(response, "content", response)
     if isinstance(content, list):
-        content = next((b.get("text") for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"), str(content))
-    return (content or "").strip()
+        return "".join(b.get("text", "") if isinstance(b, dict) else b for b in content
+                       if isinstance(b, str) or (isinstance(b, dict) and b.get("type") == "text"))
+    return content or ""
 
 
 def get_llm(temperature=0, tier="standard"):

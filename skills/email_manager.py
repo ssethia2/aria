@@ -521,7 +521,7 @@ def run_email_summary():
         return [], []
     # Get the LLM from our unified router
     print("Initializing LLM Router...")
-    from llm_router import get_llm
+    from llm_router import get_llm, reply_text
     try:
         llm = get_llm(temperature=0)
     except Exception as e:
@@ -563,7 +563,7 @@ def run_email_summary():
     
     try:
         # Clean potential markdown from output
-        cleaned_response = response.content.strip().strip('```json').strip('```')
+        cleaned_response = reply_text(response).strip().strip('```json').strip('```')
         classifications = json.loads(cleaned_response)
 
         # Auto-labelling needs the Gmail API; in IMAP/app-password mode we triage
@@ -589,6 +589,6 @@ def run_email_summary():
                 
     except json.JSONDecodeError:
         print("Failed to parse LLM response. Raw output:")
-        print(response.content)
+        print(reply_text(response))
         return [], []
 
