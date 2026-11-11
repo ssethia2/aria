@@ -805,6 +805,9 @@ Return [] if none."""
 _BOOKING = re.compile(r"\b(schedule|book|set up|arrange|find a time|pick a time|rsvp)\b", re.I)
 
 
+REPLY_LAPSES_DAYS = int(os.getenv("ARIA_REPLY_LAPSES_DAYS", "7"))
+
+
 def _fits_only(commitment: dict, proof: dict, open_items: dict) -> bool:
     """The evidence shares at least two telling words with this item and more than with
     any other open item. Sibling items ("Acme Interview 1", "Acme Interview 2") have no
@@ -842,6 +845,22 @@ def reconcile(now: datetime = None) -> list:
                     f"✅ Stopped tracking: {c['description'][:90]} — a calendar invitation or "
                     f"payment request isn't answered by email. If that's wrong, say so and "
                     f"I'll reopen it."))
+    # Replies the screener guessed at are soft: if he hasn't answered in a week he isn't
+    # going to, and carrying them forever is the nagging he asked not to get. Ones he
+    # asked to track himself, and everything that isn't a reply, never lapse.
+    lapsed = []
+    for c in list(items):
+        created = (c.get('created_at') or '')[:19]
+        if (c['kind'] == 'reply_owed' and c.get('source') == 'email' and created
+                and now - datetime.fromisoformat(created) > timedelta(days=REPLY_LAPSES_DAYS)):
+            items.remove(c)
+            if commitment_manager.drop(c['id']):
+                lapsed.append(c['description'].removeprefix("Reply to ")[:70])
+    if lapsed:
+        early.append(Notification(
+            f"🧹 Let go of {len(lapsed)} email repl{'y' if len(lapsed) == 1 else 'ies'} "
+            f"unanswered for over {REPLY_LAPSES_DAYS} days: " + "; ".join(lapsed)
+            + ". Tell me if one still matters and I'll bring it back."))
     if not items:
         return early
     sit = situation.around(items)

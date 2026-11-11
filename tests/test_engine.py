@@ -55,6 +55,16 @@ class TempStateMixin:
         os.unlink(self._tmp.name)  # start with no state file
         self._patcher = patch.object(engine, 'STATE_PATH', self._tmp.name)
         self._patcher.start()
+        # Never the real commitments database: an unpatched drop() in a test here once
+        # dropped one of his real items.
+        from skills import commitment_manager as _cm
+        self._cmdb = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._cmdb.close()
+        p = patch.object(_cm, 'DB_PATH', self._cmdb.name)
+        p.start()
+        self.addCleanup(p.stop)
+        self.addCleanup(lambda: os.path.exists(self._cmdb.name) and os.unlink(self._cmdb.name))
+        _cm.init_db()
         import situation
         self._sit = patch.object(situation, 'around',
                                  return_value={"calendar": [], "mail": {}})
@@ -1020,7 +1030,7 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
 
     def _items(self):
         base = {"who": None, "due_date": None, "due_time": None, "recurring": None,
-                "status": "open", "source": "chat", "created_at": "2026-11-03 10:00:00"}
+                "status": "open", "source": "chat", "created_at": "2026-11-05 10:00:00"}
         return [dict(base, id=1, kind="promise", description="Schedule Acme interview"),
                 dict(base, id=2, kind="reply_owed", who="Kim", source="email",
                      description="Reply to Kim: Northwind onboarding"),
@@ -1059,7 +1069,7 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
         self.assertEqual(done, [])
 
     def test_his_later_reply_closes_a_reply_owed(self):
-        sit = {"calendar": [], "mail": {2: [self._mail('sent', 'Re: Northwind onboarding', '2026-11-05 09:00:00')]}}
+        sit = {"calendar": [], "mail": {2: [self._mail('sent', 'Re: Northwind onboarding', '2026-11-06 09:00:00')]}}
         done, notes, _ = self._run(
             '[{"commitment_id": 2, "source": "mail", "quote": "Re: Northwind onboarding", "evidence": "he replied"}]', sit)
         self.assertEqual(done, [2])
@@ -1091,7 +1101,7 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
         self.assertEqual(done, [])
 
     def test_received_or_older_mail_is_not_his_reply(self):
-        for m in (self._mail('received', 'Re: Northwind onboarding', '2026-11-05 09:00:00'),
+        for m in (self._mail('received', 'Re: Northwind onboarding', '2026-11-06 09:00:00'),
                   self._mail('sent', 'Re: Northwind onboarding', '2026-11-01 09:00:00')):
             done, _, _ = self._run(
                 '[{"commitment_id": 2, "source": "mail", "quote": "Re: Northwind onboarding", "evidence": "replied"}]',
@@ -1102,7 +1112,7 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
         import situation
         base = {"who": "Kim", "due_date": None, "due_time": None, "recurring": None,
                 "status": "open", "source": "email", "kind": "reply_owed",
-                "created_at": "2026-11-03 10:00:00"}
+                "created_at": "2026-11-05 10:00:00"}
         items = [dict(base, id=1, description="Reply to Kim: Acme Interview 1"),
                  dict(base, id=2, description="Reply to Kim: Acme Interview 2")]
 
@@ -1131,6 +1141,24 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
             notes = engine.reconcile(datetime(2026, 11, 10, 12, 0))
         self.assertEqual(done, [8])
         self.assertIn("Stopped tracking", notes[0].text)
+
+    def test_screener_guessed_replies_lapse_after_a_week_but_his_own_do_not(self):
+        import situation
+        base = {"kind": "reply_owed", "who": "Kim", "recurring": None, "due_date": None}
+        items = [dict(base, id=1, source="email", created_at="2026-11-01 09:00:00",
+                      description="Reply to Kim: Acme newsletter question"),
+                 dict(base, id=2, source="chat", created_at="2026-11-01 09:00:00",
+                      description="Reply to Sam: Northwind next steps"),
+                 dict(base, id=3, source="email", created_at="2026-11-08 09:00:00",
+                      description="Reply to Jo: Porto dinner")]
+        dropped = []
+        with patch.object(situation, 'around', return_value={"calendar": [], "mail": {}}), \
+             patch('skills.commitment_manager.get_open_commitments', return_value=items), \
+             patch('skills.commitment_manager.drop', side_effect=lambda cid: dropped.append(cid) or True):
+            notes = engine.reconcile(datetime(2026, 11, 10, 12, 0))
+        self.assertEqual(dropped, [1])
+        self.assertIn("Kim: Acme newsletter question", notes[0].text)
+        self.assertIn("bring it back", notes[0].text)
 
     def test_invented_evidence_closes_nothing(self):
         sit = {"calendar": ["Thu Nov 12, 2:00 PM — Dentist"], "mail": {}}
