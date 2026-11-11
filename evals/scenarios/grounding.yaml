@@ -89,3 +89,32 @@
           is on his calendar (mentions the day or 2 PM). Does NOT present a reply to Kim as
           still owed. Presents the Porto itinerary for Sam as the thing still outstanding.
           Offering to close the Kim item is fine; claiming to have closed it is not.
+
+- id: look-up-joins-the-sources
+  why: "Asked where something stood, she answered from one source (an old memory, or one email) when mail, calendar and memory together told a different story."
+  tools:
+    look_up: |
+      Everything on 'Northwind'. These are parts of one picture: read them together, and trust mail and calendar over an older memory.
+
+      What you remember (memory and earlier chats; may include unrelated matches):
+      - He applied to Northwind for a data role and is waiting to hear back (noted {{today-12}})
+
+      Mail, last 90 days, oldest first:
+          {{wd:today-4}}, received from Kim: “Northwind: next steps” — We'd like to set up a first interview. What times work?
+          {{wd:today-3}}, HE SENT to Kim: “Re: Northwind: next steps” — {{weekday:today+2}} afternoon works.
+          {{wd:today-3}}, received from Kim: “Invitation: Northwind interview” — Confirmed for 2pm. Please bring a portfolio sample.
+
+      Calendar, past 30 days to 60 days ahead:
+          {{wd:today+2}} {{monthday:today+2}}, 2:00 PM — Northwind interview
+
+      Commitments: nothing found.
+
+      Your notes on people: nothing found.
+  turns:
+    - user: "Where are we with Northwind?"
+      expect:
+        called: [look_up]
+        judge: >
+          Gives the CURRENT state: an interview with Northwind is confirmed and on his
+          calendar (names the day or 2 PM), and mentions the portfolio sample they asked
+          for. Does NOT say he is still waiting to hear back.

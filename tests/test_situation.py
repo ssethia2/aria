@@ -96,5 +96,52 @@ class TestMailContext(unittest.TestCase):
                                    "he_replied_in_thread": False}])
 
 
+class TestKnow(unittest.TestCase):
+    def _know(self, about="Acme interview", mail=None, fail_mail=False):
+        mail_patch = (patch.object(situation, "_mail_about", side_effect=RuntimeError("down"))
+                      if fail_mail else patch.object(situation, "_mail_about", return_value=mail or []))
+        with patch("memory.recall", return_value="- He applied to Acme (noted 2026-10-20)"), \
+             patch("email_backend.using_app_password", return_value=False), \
+             patch("skills.email_manager.get_gmail_service", return_value=MagicMock()), \
+             mail_patch, \
+             patch("skills.google_calendar.fetch_events", return_value=[
+                 "Thu Nov 12, 2:00 PM — Acme interview", "Fri Nov 13, 9:00 AM — Dentist"]), \
+             patch("skills.commitment_manager.get_open_commitments", return_value=[
+                 {"id": 4, "description": "Send Acme references", "who": None, "kind": "promise",
+                  "due_date": None, "due_time": None, "recurring": None},
+                 {"id": 5, "description": "Renew passport", "who": None, "kind": "promise",
+                  "due_date": None, "due_time": None, "recurring": None}]), \
+             patch("skills.commitment_manager.recently_closed", return_value=[
+                 {"id": 2, "description": "Finish Acme assessment", "status": "done",
+                  "closed_at": "2026-11-01 10:00:00"}]), \
+             patch("people._load", return_value=[{"name": "Kim Lee", "relation": "Acme recruiter"}]):
+            return situation.know(about)
+
+    def test_one_call_returns_every_source_filtered_to_the_subject(self):
+        out = self._know(mail=[{"id": "a", "direction": "sent", "who": "kim@acme.example",
+                                "subject": "Re: Acme interview", "snippet": "Thursday works",
+                                "ts": 1794000000}])
+        for expected in ("He applied to Acme", "HE SENT to kim@acme.example",
+                         "Thu Nov 12, 2:00 PM — Acme interview", "Send Acme references",
+                         "done 2026-11-01: Finish Acme assessment"):
+            self.assertIn(expected, out)
+        self.assertNotIn("Dentist", out)
+        self.assertNotIn("Renew passport", out)
+
+    def test_an_empty_or_broken_source_says_so_and_the_rest_still_answer(self):
+        out = self._know(fail_mail=True)
+        self.assertIn("couldn't be read just now", out)
+        self.assertIn("Your notes on people: nothing found.", out)
+        self.assertIn("Acme interview", out)
+
+    def test_needs_something_to_look_up(self):
+        self.assertIn("Give me a name", situation.know("the"))
+
+    def test_owner_has_the_tool_and_guests_do_not(self):
+        import agent_core
+        self.assertIn("look_up", {t.name for t in agent_core.build_tools(guest=False)})
+        self.assertNotIn("look_up", {t.name for t in agent_core.build_tools(guest=True)})
+
+
 if __name__ == "__main__":
     unittest.main()

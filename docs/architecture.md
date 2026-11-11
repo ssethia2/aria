@@ -56,6 +56,8 @@ A daemon thread inside the bot runs pluggable `Monitor`s, each on its own interv
 
 Incoming mail gets the same treatment in both places that judge it, the engine's screener and the morning briefing's summary: `situation.enrich_mail()` gives each email its thread so far, what memory holds about the sender and matter, and the people notes on the sender; `situation.in_motion()` adds the calendar and open commitments; both prompts share `MAIL_GUIDE` and his standing rules, so the two can't read the same email differently for lack of context.
 
+`situation.know(about)` is the general form, exposed to the chat brain as the `look_up` tool: one call returns everything on a person, company, trip or topic from memory and earlier chats, mail both ways (90 days), the calendar (a month back, two ahead), commitments (open and recently closed) and the people notes. Mail and calendar are read live, never copied into memory: a copy goes stale, and memory holds only what exists nowhere else. This lookup is the base the background judges are meant to move onto, one monitor at a time.
+
 Everything Aria says on her own judgment passes one gate ([ADR 0009](adr/0009-moments-and-one-gate.md)): judgment pings ("nudges" — chase, insight, moments) share a daily budget, and every judge reads the same standing rules and the same 48-hour log of what she has already told him, so a rule binds every monitor and none repeats another. Reports (reminders he set, digests, results of actions) always go through. Engine messages reach the live conversation too, so he can answer an offer with "yes".
 
 | Monitor | What it does |

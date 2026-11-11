@@ -7,8 +7,9 @@ answer a thread he had answered. around() gathers those parts for a set of commi
 describe() renders them for a prompt or a tool result. enrich_mail() and in_motion() do the
 same for anything judging incoming mail: each email gets its thread so far, what she
 remembers about the sender and matter, and her notes on the person; the judge also gets his
-calendar and open commitments. Read-only, owner-only, and it never raises: with no Gmail
-or calendar it returns nothing and callers carry on as before.
+calendar and open commitments. know() is the general form: everything she has on a
+person, company, trip or topic, from every source at once. Read-only, owner-only, and it
+never raises: with no Gmail or calendar it returns nothing and callers carry on as before.
 """
 import re
 import time
@@ -247,3 +248,105 @@ def in_motion() -> dict:
         print(f"[situation] commitments unavailable: {e}")
     return {"calendar": "\n".join(calendar) or "(nothing)",
             "commitments": "\n".join(commitments) or "(none)"}
+
+
+# ---- the general lookup: "what do I know about X?" -------------------------------------
+
+KNOW_MAIL_DAYS = 90
+KNOW_BACK_DAYS = 30
+KNOW_AHEAD_DAYS = 60
+
+
+def _mail_about(service, about: str, terms: list) -> list:
+    """Recent mail on a subject, sent and received, oldest first. The phrase as he said it
+    first (Gmail matches all its words); any single word only if that finds nothing."""
+    api = service.users().messages()
+    window = (f'newer_than:{KNOW_MAIL_DAYS}d -subject:"Daily Assistant Summary" '
+              f'-category:promotions')
+    ids = []
+    for q in (f'{about} {window}', f'{{{" ".join(terms)}}} {window}'):
+        ids = [m['id'] for m in api.list(userId='me', q=q, maxResults=12)
+               .execute().get('messages', [])]
+        if ids:
+            break
+    msgs = _batch(service, {mid: api.get(userId='me', id=mid, format='metadata',
+                                         metadataHeaders=['From', 'To', 'Subject'])
+                            for mid in ids})
+    mail = []
+    for mid in ids:
+        msg = msgs.get(mid)
+        if not msg:
+            continue
+        h = {x['name']: x['value'] for x in msg.get('payload', {}).get('headers', [])}
+        sent = 'SENT' in (msg.get('labelIds') or [])
+        mail.append({'id': mid, 'direction': 'sent' if sent else 'received',
+                     'who': h.get('To' if sent else 'From', ''),
+                     'subject': h.get('Subject', ''), 'snippet': msg.get('snippet', ''),
+                     'ts': int(msg.get('internalDate', 0)) / 1000})
+    return sorted(mail, key=lambda m: m['ts'])[-8:]
+
+
+def know(about: str) -> str:
+    """Everything she has on a person, company, trip or topic: memory and past chats,
+    mail both ways, calendar (past month and two ahead), commitments open and recently
+    closed, and her notes on the person. Each source fails alone; an empty one says so,
+    because "nothing in his mail" is itself an answer."""
+    about = " ".join((about or "").split())
+    terms = sorted(words(about), key=lambda w: (-len(w), w))[:5]
+    if not terms:
+        return "Give me a name, company, place or topic to look up."
+    hit = lambda text: bool(words(text) & set(terms))   # noqa: E731
+    sections = []
+
+    def section(title, fn):
+        try:
+            body = fn()
+        except Exception as e:
+            print(f"[situation] know: {title} unavailable: {e}")
+            body = None
+            title += " (couldn't be read just now)"
+        sections.append(f"{title}:\n{body}" if body else f"{title}: nothing found.")
+
+    def from_memory():
+        import memory
+        return memory.recall(about, n_results=6, min_words=1)
+
+    def from_mail():
+        import email_backend
+        from skills.email_manager import get_gmail_service
+        service = None if email_backend.using_app_password() else get_gmail_service()
+        if not service:
+            raise RuntimeError("no Gmail service")
+        return "\n".join(_mail_line(m) for m in _mail_about(service, about, terms))
+
+    def from_calendar():
+        from skills.google_calendar import fetch_events
+        events = fetch_events(days=KNOW_AHEAD_DAYS, dated=True, back_days=KNOW_BACK_DAYS)
+        if events is None:
+            raise RuntimeError("no calendar service")
+        return "\n".join(f"    {e}" for e in events if hit(e))
+
+    def from_commitments():
+        from skills.commitment_manager import (get_open_commitments, recently_closed,
+                                               format_line)
+        lines = [f"    open: {format_line(c)}" for c in get_open_commitments()
+                 if hit(f"{c['description']} {c.get('who') or ''}")]
+        lines += [f"    {c['status']} {str(c.get('closed_at') or '')[:10]}: {c['description']}"
+                  for c in recently_closed(40) if hit(c['description'])][:6]
+        return "\n".join(lines)
+
+    def from_people():
+        import people
+        return "\n".join("    " + ", ".join(f"{k}: {v}" for k, v in p.items() if v)
+                         for p in people._load()
+                         if hit(" ".join([p.get('name', '')] + list(p.get('aliases', [])))))
+
+    section("What you remember (memory and earlier chats; may include unrelated matches)",
+            from_memory)
+    section(f"Mail, last {KNOW_MAIL_DAYS} days, oldest first", from_mail)
+    section(f"Calendar, past {KNOW_BACK_DAYS} days to {KNOW_AHEAD_DAYS} days ahead",
+            from_calendar)
+    section("Commitments", from_commitments)
+    section("Your notes on people", from_people)
+    return (f"Everything on {about!r}. These are parts of one picture: read them together, "
+            f"and trust mail and calendar over an older memory.\n\n" + "\n\n".join(sections))

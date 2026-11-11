@@ -49,6 +49,7 @@ _HA_NOT_CONNECTED = ("Smart home isn't connected yet — set HA_URL and HA_TOKEN
 DEFAULT_FAKES = {
     "add_memory": "Saved to memory.",
     "search_memory": "No relevant memories found.",
+    "look_up": "Nothing found on '{about}' in memory, mail, calendar, commitments or people notes.",
     "update_memory": "Profile updated: {key} = {value}",
     "read_and_summarize_emails": "Processed 3 emails. Summary generated.",
     "read_email_thread": "No matching email thread found for '{search_query}'.",
@@ -156,7 +157,7 @@ class Sandbox:
         self._start(memory, "CONVERSATION_PATH", os.path.join(d, "conversation.jsonl"))
         self._start(memory, "SCRATCHPAD_PATH", os.path.join(d, "scratchpad.txt"))
         # Recall before each turn reads the scenario's memory, never his real store.
-        self._start(memory, "recall", lambda message, n_results=5: str(
+        self._start(memory, "recall", lambda message, n_results=5, min_words=2: str(
             self.overrides.get("search_memory", "")).strip())
         self._start(google_calendar, "CONFIG_PATH", os.path.join(d, "calendar_config.json"))
         # list_commitments runs for real and would read his mail and calendar around each

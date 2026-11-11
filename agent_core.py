@@ -69,6 +69,25 @@ CHECKPOINT_DB_PATH = os.path.join(os.path.dirname(__file__), "aria_checkpoints.d
 
 
 @tool
+def look_up(about: str) -> str:
+    """Everything you know about a person, company, trip, event or topic, from every
+    source in ONE call: your memory and earlier chats with him, his mail both ways (last 90
+    days), his calendar (past month, two months ahead), his commitments (open and recently
+    closed) and your notes on people. Use this FIRST whenever he mentions or asks about
+    something with history ("where are we with Acme?", "what's the plan for Porto?", "did
+    Kim get back to me?", "prep me for Thursday"), and before you tell him where anything
+    stands. The parts are one picture: a memory says he applied, the mail shows the invite,
+    the calendar shows the interview. Then use `read_email_thread` if you need a message in
+    full. READ-ONLY.
+
+    Args:
+        about: the name or topic in a few words, e.g. 'Acme', 'Kim Lee', 'Porto trip'.
+    """
+    import situation
+    return situation.know(about)
+
+
+@tool
 def read_and_summarize_emails() -> str:
     """Use this tool to read the user's recent emails, categorize them, and delete junk."""
     classifications, raw_emails = run_email_summary()
@@ -102,6 +121,7 @@ def build_tools(guest=False):
     return [
         add_memory,
         search_memory,
+        look_up,
         read_and_summarize_emails,
         read_email_thread,
         generate_morning_news,
@@ -282,7 +302,8 @@ done that you don't see in this conversation, use `search_memory` BEFORE answeri
 deny having done something without checking.
 
 You have access to a semantic memory database and several active skills.
-- Use `search_memory` when the user asks about their past preferences, or when you need context about a person or topic mentioned in conversation.
+- Use `look_up` whenever he mentions or asks about a person, company, trip or topic with history: it returns your memory, his mail both ways, his calendar, his commitments and your people notes together. His texts to you, his email, his calendar and your memory are ONE picture; never answer from one of them alone when the others could change the answer.
+- Use `search_memory` for his preferences and for things only memory holds.
 - Use `add_memory` when the user tells you a NEW fact, preference, or event about themselves. BE PROACTIVE in saving new preferences so you don't forget them!
 - Use `read_and_summarize_emails` when the user asks you to check their inbox or summarize their mail.
 - Use `read_email_thread` when the user asks about ONE specific thread ("what's the X email about?", "what did Rohan say?") — search for it and read it back. You DO have email access; never tell the user you can't access their Gmail.

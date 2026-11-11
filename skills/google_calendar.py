@@ -403,7 +403,7 @@ def get_calendar_events(days: int = 1, calendar: str = 'both') -> str:
 
 
 def fetch_events(days: int = 1, calendar: str = 'both', hours: int = None,
-                 dated: bool = False):
+                 dated: bool = False, back_days: int = 0):
     """Event lines for tools and the briefing. Returns None when the service isn't there.
 
     The window runs from now through the end of the day `days` ahead, or exactly `hours`
@@ -415,12 +415,13 @@ def fetch_events(days: int = 1, calendar: str = 'both', hours: int = None,
     per the user's rule those are Ashley's/joint events, and the tag preserves what the
     dedup used to erase. 'personal' / 'shared' scope to a single calendar (no dedup —
     what's on that calendar is exactly what you get). dated=True adds the date to each
-    label ("Thu Nov 12, 2:00 PM"): a weekday alone is ambiguous past a week."""
+    label ("Thu Nov 12, 2:00 PM"): a weekday alone is ambiguous past a week. back_days
+    starts the window that many days in the past (what already happened)."""
     service = get_calendar_service()
     if not service:
         return None
     now = datetime.now().astimezone()
-    time_min = now.isoformat()
+    time_min = (now - timedelta(days=back_days)).isoformat()
     end = (now + timedelta(hours=hours) if hours else
            (now + timedelta(days=days)).replace(hour=23, minute=59))
     time_max = end.isoformat()

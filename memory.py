@@ -143,18 +143,19 @@ def _matching_exchanges(query: str, limit: int = 3, min_hits: int = 1) -> list:
     return [ex for _, _, ex in scored[:limit]]
 
 
-def recall(message: str, n_results: int = 5) -> str:
+def recall(message: str, n_results: int = 5, min_words: int = 2) -> str:
     """What she'd remember unprompted on hearing this message: dated semantic matches plus
     not-yet-compacted exchanges. Given the trip in memory, she still never searched it: she
     went to email, found an unreadable confirmation, and guessed. "" when there's nothing,
-    or the message is too thin to search on ("yes please")."""
+    or the message is too thin to search on ("yes please"). A deliberate lookup passes
+    min_words=1: "Acme" alone is a real query there."""
     if is_guest():
         return ""
     words = {w for w in re.findall(r"[a-z0-9]+", (message or "").lower()) if len(w) >= 4} - _STOP
-    if len(words) < 2:
+    if len(words) < min_words:
         return ""
     lines = [f"- [{ex.get('at', '?')}] he said: {ex.get('user', '')[:600]} / you said: "
-             f"{ex.get('aria', '')[:600]}" for ex in _matching_exchanges(message, 2, min_hits=2)]
+             f"{ex.get('aria', '')[:600]}" for ex in _matching_exchanges(message, 2, min_hits=min(2, len(words)))]
     if collection is not None and embeddings is not None:
         try:
             res = collection.query(query_embeddings=[embeddings.embed_query(message)],
