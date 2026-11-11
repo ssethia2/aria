@@ -59,9 +59,12 @@ class TempStateMixin:
                                  return_value={"calendar": [], "mail": {}})
         self._sit.start()
         self.addCleanup(self._sit.stop)
-        self._motion = patch.object(engine.EmailDigestMonitor, '_in_motion',
-                                    return_value=("(nothing)", "(none)"))
+        self._motion = patch.object(situation, 'in_motion', return_value={
+            "calendar": "(nothing)", "commitments": "(none)"})
         self._motion.start()
+        self._known = patch.object(situation, 'known_about', return_value={})
+        self._known.start()
+        self.addCleanup(self._known.stop)
         self.addCleanup(self._motion.stop)
 
     def tearDown(self):
@@ -521,6 +524,7 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         self.assertIn("Never track apartment emails as reply-owed commitments.", prompt)
 
     def test_screener_knows_when_he_is_already_in_the_thread(self):
+        import situation
         # A recruiter he'd been writing to for a week was digested as "cold outreach he can
         # ignore per standing rules" — there was no such rule, and he'd replied.
         threads = MagicMock()
@@ -530,13 +534,24 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
             {'id': 'm1', 'labelIds': ['INBOX'], 'snippet': 'Invite sent'}]}
         service = MagicMock()
         service.users.return_value.threads.return_value = threads
-        earlier = EmailDigestMonitor._thread_so_far(service, 't1', 'm1')
+        earlier = situation.thread_so_far(service, 't1', 'm1')
         self.assertEqual([m['direction'] for m in earlier], ['received', 'sent'])
         self.assertEqual(earlier[1]['snippet'], 'Thursday 2pm works')
-        self.assertEqual(EmailDigestMonitor._thread_so_far(None, 't1'), [])
+        self.assertEqual(situation.thread_so_far(None, 't1'), [])
         _, _, _, prompt = self._screen_one("RE: Acme recruiting", "Kim <kim@acme.com>", '[]')
         self.assertIn('"he_replied_in_thread"', prompt)
         self.assertIn("Never cite", prompt)
+
+    def test_screener_reads_mail_against_memory_and_what_is_in_motion(self):
+        import situation
+        with patch.object(situation, 'known_about',
+                          return_value={"you_remember": "- interviewing with Acme"}), \
+             patch.object(situation, 'in_motion', return_value={
+                 "calendar": "Thu Nov 12, 2:00 PM — Acme interview", "commitments": "(none)"}):
+            _, _, _, prompt = self._screen_one("Acme interview", "Kim <kim@acme.com>", '[]')
+        self.assertIn("interviewing with Acme", prompt)
+        self.assertIn("Thu Nov 12, 2:00 PM — Acme interview", prompt)
+        self.assertIn("one moving part", prompt)
 
     def test_rule_asked_alert_goes_out_now_not_in_the_digest(self):
         """'Alert me right away about interview invites' was saved, then never honored."""

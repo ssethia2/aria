@@ -24,6 +24,41 @@ class TestRunEmailSummary(unittest.TestCase):
         self.assertFalse(raw_emails)
 
 
+class TestBriefingSummaryContext(unittest.TestCase):
+    def test_summary_judge_sees_thread_memory_calendar_commitments_and_rules(self):
+        """The briefing judged each email from sender, subject and snippet alone."""
+        import situation
+        emails = [{"id": "m1", "subject": "Acme interview", "sender": "Kim <kim@acme.example>",
+                   "snippet": "Confirmed", "list_unsubscribe": "", "thread_id": "t1"}]
+        seen = {}
+
+        class FakeLLM:
+            def invoke(self, value, *a, **k):
+                seen["prompt"] = value.to_string()
+                return MagicMock(content='[{"id": "m1", "category": "IMPORTANT", "summary": "s", "action": "KEEP"}]')
+
+        from langchain_core.runnables import RunnableLambda
+        llm = RunnableLambda(FakeLLM().invoke)
+        with patch.object(email_manager, 'get_gmail_service', return_value=MagicMock()), \
+             patch.object(email_manager, 'fetch_recent_emails', return_value=emails), \
+             patch('email_backend.using_app_password', return_value=False), \
+             patch('llm_router.get_llm', return_value=llm), \
+             patch.object(email_manager, 'load_profile', return_value={}), \
+             patch.object(email_manager, 'get_or_create_label', return_value='L'), \
+             patch('instructions.render_for_prompt', return_value="1. Ping me about interviews"), \
+             patch.object(situation, 'thread_so_far', return_value=[{"direction": "sent", "snippet": "Thursday 2pm works"}]), \
+             patch.object(situation, 'known_about', return_value={"you_remember": "- interviewing with Acme"}), \
+             patch.object(situation, 'in_motion', return_value={
+                 "calendar": "Thu Nov 12, 2:00 PM — Acme interview", "commitments": "(none)"}):
+            classifications, raw = email_manager.run_email_summary()
+        p = seen["prompt"]
+        for expected in ("Thursday 2pm works", "interviewing with Acme", "Ping me about interviews",
+                         "Thu Nov 12, 2:00 PM — Acme interview", "one moving part"):
+            self.assertIn(expected, p)
+        self.assertEqual(classifications[0]["id"], "m1")
+        self.assertNotIn("thread_id", raw[0])
+
+
 class TestSendEmailAllowlist(unittest.TestCase):
     def test_blocks_recipient_not_on_allowlist(self):
         service = MagicMock()

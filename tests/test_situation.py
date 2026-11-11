@@ -69,5 +69,32 @@ class TestAround(unittest.TestCase):
         self.assertIn("newer_than:21d {acme}", msgs.list.call_args.kwargs["q"])
 
 
+class TestMailContext(unittest.TestCase):
+    def test_each_email_gets_its_thread_memory_and_person_notes(self):
+        service = MagicMock()
+        service.users.return_value.threads.return_value.get.return_value.execute.return_value = {
+            "messages": [{"id": "a", "labelIds": ["SENT"], "snippet": "Thursday 2pm works"},
+                         {"id": "m1", "labelIds": ["INBOX"], "snippet": "Invite sent"}]}
+        emails = [{"id": "m1", "sender": "Kim Lee <kim@acme.example>",
+                   "subject": "Acme interview", "thread_id": "t1"}]
+        with patch("memory.recall", return_value="- He is interviewing with Acme") as recall, \
+             patch("people._load", return_value=[{"name": "Kim Lee", "relation": "recruiter"}]):
+            situation.enrich_mail(emails, service)
+        e = emails[0]
+        self.assertTrue(e["he_replied_in_thread"])
+        self.assertEqual(e["earlier_in_thread"][0]["snippet"], "Thursday 2pm works")
+        self.assertIn("interviewing with Acme", e["you_remember"])
+        self.assertIn("recruiter", e["sender_notes"])
+        self.assertNotIn("thread_id", e)
+        self.assertIn("Kim Lee Acme interview", recall.call_args[0][0])
+
+    def test_nothing_known_adds_nothing(self):
+        emails = [{"id": "m1", "sender": "x@y.example", "subject": "hello"}]
+        with patch("memory.recall", return_value=""), patch("people._load", return_value=[]):
+            situation.enrich_mail(emails)
+        self.assertEqual(emails, [{"id": "m1", "sender": "x@y.example", "subject": "hello",
+                                   "he_replied_in_thread": False}])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,8 +4,11 @@ A commitment row is one moving part of a task. The others live elsewhere: the re
 sent yesterday, the invite that landed after it, the event now on his calendar. Judging a
 row alone, Aria nudged him to "schedule the interview" that was already booked and to
 answer a thread he had answered. around() gathers those parts for a set of commitments;
-describe() renders them for a prompt or a tool result. Read-only, owner-only, and it never
-raises: with no Gmail or calendar it returns nothing and callers carry on as before.
+describe() renders them for a prompt or a tool result. enrich_mail() and in_motion() do the
+same for anything judging incoming mail: each email gets its thread so far, what she
+remembers about the sender and matter, and her notes on the person; the judge also gets his
+calendar and open commitments. Read-only, owner-only, and it never raises: with no Gmail
+or calendar it returns nothing and callers carry on as before.
 """
 import re
 import time
@@ -162,3 +165,85 @@ def describe(commitments: list) -> str:
     except Exception as e:
         print(f"[situation] skipped: {e}")
         return ""
+
+
+# ---- incoming mail: one context for every judge that reads it ---------------------------
+
+MAIL_GUIDE = """An email is usually one moving part of something already in motion, so read it against
+everything you know, not alone:
+- "earlier_in_thread" is the conversation so far (his own messages are marked "sent");
+- "you_remember" is what your memory holds that may relate (he tells you things in chat:
+  who he's interviewing with, trips he's planning, people he's dealing with). Use it only
+  when it is clearly about the same person or matter;
+- "sender_notes" is what he has told you about this person;
+- his calendar and open commitments are listed with the emails.
+If the email confirms or continues something already on his calendar or already tracked,
+say so ("confirms the Acme interview already on your calendar for Thu 2 PM") and don't ask
+for a reply he has already given or an action already done. If it CHANGES something (a new
+time, a cancellation, a new ask), say what changed. Mail from a person or company your
+memory shows he is actively dealing with matters, however routine it looks."""
+
+
+def thread_so_far(service, thread_id, message_id=None) -> list:
+    """The thread's earlier messages, oldest first: [{"direction", "snippet"}]. A recruiter
+    he'd been writing to for a week was digested as "cold outreach he can ignore", and an
+    invite answering his own reply read as a fresh ask: each email was judged alone."""
+    if not (service and thread_id):
+        return []
+    try:
+        thread = service.users().threads().get(
+            userId='me', id=thread_id, format='metadata', metadataHeaders=['From']).execute()
+        return [{'direction': 'sent' if 'SENT' in (m.get('labelIds') or []) else 'received',
+                 'snippet': (m.get('snippet') or '')[:200]}
+                for m in thread.get('messages', []) if m.get('id') != message_id][-4:]
+    except Exception:
+        return []
+
+
+def known_about(sender: str, subject: str) -> dict:
+    """What memory and the people notes hold about an email's sender and matter."""
+    out = {}
+    name = (sender or '').split('<')[0].strip(' "')
+    try:
+        import memory
+        found = memory.recall(f"{name} {subject}", n_results=3)
+        if found:
+            out['you_remember'] = found[:900]
+    except Exception as e:
+        print(f"[situation] memory unavailable: {e}")
+    try:
+        import people
+        hit = people._find(people._load(), name) if name else None
+        if hit:
+            out['sender_notes'] = ", ".join(f"{k}: {v}" for k, v in hit.items() if v)
+    except Exception as e:
+        print(f"[situation] people notes unavailable: {e}")
+    return out
+
+
+def enrich_mail(emails: list, service=None) -> None:
+    """Give each email (in place) its thread so far and what is known about it. Emails
+    carry "thread_id" in; it is consumed here."""
+    for e in emails:
+        earlier = thread_so_far(service, e.pop('thread_id', None), e.get('id'))
+        e['he_replied_in_thread'] = any(m['direction'] == 'sent' for m in earlier)
+        if earlier:
+            e['earlier_in_thread'] = earlier
+        e.update(known_about(e.get('sender', ''), e.get('subject', '')))
+
+
+def in_motion() -> dict:
+    """His calendar (next 30 days) and open commitments, as prompt text."""
+    calendar, commitments = [], []
+    try:
+        from skills.google_calendar import fetch_events
+        calendar = fetch_events(days=CALENDAR_DAYS, dated=True) or []
+    except Exception as e:
+        print(f"[situation] calendar unavailable: {e}")
+    try:
+        from skills.commitment_manager import get_open_commitments, format_line
+        commitments = [format_line(c) for c in get_open_commitments()]
+    except Exception as e:
+        print(f"[situation] commitments unavailable: {e}")
+    return {"calendar": "\n".join(calendar) or "(nothing)",
+            "commitments": "\n".join(commitments) or "(none)"}

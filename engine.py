@@ -252,13 +252,7 @@ warrant a reply, so the user can judge.
 alert_now = TRUE only when one of his standing rules says to alert him immediately about
 this kind of email.
 
-An email is usually one moving part of something already in motion, so read it against
-what's there: "earlier_in_thread" is the conversation so far (his own messages marked
-"sent"), and his calendar and open commitments are below. If the email confirms or
-continues something already on his calendar or already tracked, say that in the reason
-("confirms the Acme interview already on your calendar for Thu 2 PM") and don't ask for a
-reply he has already given or an action already done. If it CHANGES something (a new time,
-a cancellation, a new ask), say what changed.
+{guide}
 
 His calendar, next 30 days:
 {calendar}
@@ -428,40 +422,6 @@ Return [] if none — that should be the common case."""
                 f"({source}: “{email['subject']}”). If that's wrong, say so and I'll reopen it."))
         return notes
 
-    @staticmethod
-    def _thread_so_far(service, thread_id, message_id=None) -> list:
-        """The thread's earlier messages, oldest first: [{"direction", "snippet"}]. A
-        recruiter he'd been writing to for a week was digested as "cold outreach he can
-        ignore", and an invite answering his own reply read as a fresh ask: the screener
-        saw each email alone."""
-        if not (service and thread_id):
-            return []
-        try:
-            thread = service.users().threads().get(
-                userId='me', id=thread_id, format='metadata',
-                metadataHeaders=['From']).execute()
-            return [{'direction': 'sent' if 'SENT' in (m.get('labelIds') or []) else 'received',
-                     'snippet': (m.get('snippet') or '')[:200]}
-                    for m in thread.get('messages', []) if m.get('id') != message_id][-4:]
-        except Exception:
-            return []
-
-    @staticmethod
-    def _in_motion() -> tuple:
-        """(calendar lines, open commitment lines) for the screener."""
-        calendar, commitments = [], []
-        try:
-            from skills.google_calendar import fetch_events
-            calendar = fetch_events(days=30, dated=True) or []
-        except Exception as e:
-            print(f"[engine] email-digest: calendar unavailable: {e}")
-        try:
-            from skills.commitment_manager import get_open_commitments, format_line
-            commitments = [format_line(c) for c in get_open_commitments()]
-        except Exception as e:
-            print(f"[engine] email-digest: commitments unavailable: {e}")
-        return ("\n".join(calendar) or "(nothing)", "\n".join(commitments) or "(none)")
-
     def _screen_new_mail(self, state: dict):
         import email_backend
         from skills.email_manager import get_gmail_service
@@ -509,14 +469,9 @@ Return [] if none — that should be the common case."""
         if not emails:
             return []
 
-        for e in emails:
-            earlier = self._thread_so_far(
-                service if not email_backend.using_app_password() else None,
-                e.pop('thread_id', None), e['id'])
-            e['he_replied_in_thread'] = any(m['direction'] == 'sent' for m in earlier)
-            if earlier:
-                e['earlier_in_thread'] = earlier
-        calendar, commitments = self._in_motion()
+        import situation
+        situation.enrich_mail(emails, service if not email_backend.using_app_password() else None)
+        motion = situation.in_motion()
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
         # His standing rules ("never track apartment emails as replies owed", "alert me right
         # away about interview invites") used to reach only the chat agent, so the screener
@@ -524,7 +479,7 @@ Return [] if none — that should be the common case."""
         from instructions import render_for_prompt
         response = _get_llm().invoke(self.SCREEN_PROMPT.format(
             rules=render_for_prompt() or "(none)", emails=json.dumps(emails, indent=2),
-            calendar=calendar, commitments=commitments))
+            guide=situation.MAIL_GUIDE, **motion))
         content = response.content
         if isinstance(content, list):
             content = next((b['text'] for b in content

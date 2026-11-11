@@ -195,6 +195,7 @@ def fetch_recent_emails(service, max_results=10):
                 'snippet': snippet,
                 'list_unsubscribe': next(
                     (h['value'] for h in headers if h['name'].lower() == 'list-unsubscribe'), ''),
+                'thread_id': msg.get('threadId'),
             })
             
         return email_data
@@ -531,36 +532,63 @@ def run_email_summary():
     # Load User Profile (Memory Layer 1)
     profile_data = load_profile()
     profile_text = json.dumps(profile_data, indent=2) if profile_data else "No specific personal context available."
+    # The same picture the engine's screener gets: each email with its thread so far and
+    # what she remembers about it, plus his calendar, commitments and standing rules. The
+    # briefing used to judge from sender, subject and snippet alone.
+    import situation
+    from instructions import render_for_prompt
+    judged = [dict(e) for e in emails]
+    situation.enrich_mail(judged, None if app_pw else service)
+    for e in emails:
+        e.pop('thread_id', None)
+    motion = situation.in_motion()
     prompt = PromptTemplate(
-        input_variables=["email_data", "profile_data"],
-        template='''You are an intelligent email assistant. Analyze the following emails.
-        For each email, decide if it is "IMPORTANT", "NEWS", or "JUNK/PROMOTION".
-        
-        Here is what you know about the user:
+        input_variables=["email_data", "profile_data", "rules", "guide", "calendar",
+                         "commitments"],
+        template='''You are the user's personal assistant, writing the email part of his morning
+        briefing. For each email, decide if it is "IMPORTANT", "NEWS", or "JUNK/PROMOTION".
+
+        What you know about him:
         {profile_data}
-        
-        Use this knowledge to determine what is truly important to them.
-        
+
+        His standing rules (follow them; they override your defaults):
+        {rules}
+
+        {guide}
+
+        His calendar, next 30 days:
+        {calendar}
+
+        His open commitments:
+        {commitments}
+
         Emails:
         {email_data}
-        
+
+        Write each summary for him, saying where the matter stands, not just what the
+        email says: connect it to the thread, his calendar, his commitments and what you
+        remember ("Kim confirmed Thursday 2 PM; it's already on your calendar, nothing to
+        do"). Never state a detail that isn't in front of you.
+
         Return ONLY a raw JSON array of objects with the following keys:
         - "id": the email id
         - "category": the category you chose
-        - "summary": a 1-sentence summary of the email (if important/news. If junk, leave blank)
+        - "summary": a 1-2 sentence summary (if important/news. If junk, leave blank)
         - "action": "KEEP" or "DELETE"
-        
+
         Do not output markdown code blocks. Just the raw JSON array.
         '''
     )
-    formatted_emails = json.dumps(emails, indent=2)
     chain = prompt | llm
-    
+
     response = chain.invoke({
-        "email_data": formatted_emails,
-        "profile_data": profile_text
+        "email_data": json.dumps(judged, indent=2),
+        "profile_data": profile_text,
+        "rules": render_for_prompt() or "(none)",
+        "guide": situation.MAIL_GUIDE,
+        **motion,
     })
-    
+
     try:
         # Clean potential markdown from output
         cleaned_response = reply_text(response).strip().strip('```json').strip('```')
