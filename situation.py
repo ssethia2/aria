@@ -17,6 +17,7 @@ from datetime import datetime
 
 WINDOW_DAYS = 21        # how far back mail still counts as part of the same matter
 CALENDAR_DAYS = 30
+CALENDAR_BACK_DAYS = 21
 PER_ITEM = 5            # mail lines shown per commitment
 MAX_ITEMS = 60
 CACHE_SECONDS = 300     # chat can list commitments several times in a conversation
@@ -117,7 +118,10 @@ def around(commitments: list) -> dict:
         return out
     try:
         from skills.google_calendar import fetch_events
-        out["calendar"] = fetch_events(days=CALENDAR_DAYS, dated=True) or []
+        # Past weeks too: an interview that already happened still settles the thread
+        # that arranged it.
+        out["calendar"] = fetch_events(days=CALENDAR_DAYS, dated=True,
+                                       back_days=CALENDAR_BACK_DAYS) or []
     except Exception as e:
         print(f"[situation] calendar unavailable: {e}")
     try:
@@ -154,7 +158,8 @@ def render(commitments: list, sit: dict) -> str:
         blocks.append(f"Mail from the last {WINDOW_DAYS} days that may concern them, "
                       "oldest first:\n" + "\n".join(parts))
     if sit["calendar"]:
-        blocks.append(f"On his calendar, next {CALENDAR_DAYS} days:\n"
+        blocks.append(f"On his calendar, past {CALENDAR_BACK_DAYS} days to next "
+                      f"{CALENDAR_DAYS} days:\n"
                       + "\n".join(f"  {line}" for line in sit["calendar"]))
     return "\n\n".join(blocks)
 
@@ -199,6 +204,22 @@ def thread_so_far(service, thread_id, message_id=None) -> list:
                 for m in thread.get('messages', []) if m.get('id') != message_id][-4:]
     except Exception:
         return []
+
+
+def replied_since(service, thread_id, message_id) -> bool:
+    """Did he send anything on the thread AFTER this message? A note written when an email
+    arrived ("she's waiting on your reply") is stale the moment he answers."""
+    if not (service and thread_id and message_id):
+        return False
+    try:
+        msgs = service.users().threads().get(
+            userId='me', id=thread_id, format='minimal').execute().get('messages', [])
+        ids = [m.get('id') for m in msgs]
+        if message_id not in ids:
+            return False
+        return any('SENT' in (m.get('labelIds') or []) for m in msgs[ids.index(message_id) + 1:])
+    except Exception:
+        return False
 
 
 def known_about(sender: str, subject: str) -> dict:

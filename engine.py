@@ -470,6 +470,7 @@ Return [] if none — that should be the common case."""
             return []
 
         import situation
+        threads = {e['id']: e.get('thread_id') for e in emails}
         situation.enrich_mail(emails, service if not email_backend.using_app_password() else None)
         motion = situation.in_motion()
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
@@ -498,7 +499,9 @@ Return [] if none — that should be the common case."""
             if not email:
                 continue
             entry = {"sender": email['sender'], "subject": email['subject'],
-                     "reason": item.get('reason', '')}
+                     "reason": item.get('reason', ''), "id": email['id'],
+                     "thread_id": threads.get(email['id']),
+                     "at": self.now_fn().strftime('%a %-I:%M %p')}
             # Deterministic guard: you can't OWE a reply to a no-reply/automated sender
             # (bank notices, booking confirmations, validation emails) no matter what the
             # screening LLM said. Still flagged in the digest — just never tracked.
@@ -549,18 +552,105 @@ Return [] if none — that should be the common case."""
         if not items:
             return []
         state["pending_digest"] = []
-        lines = []
-        tracked = 0
-        for it in items:
-            line = f"• {it['sender']} — “{it['subject']}”: {it['reason']}"
-            if it.get("tracked"):
-                line += f" (tracking reply as {it['tracked']})"
-                tracked += 1
-            lines.append(line)
-        header = "📬 Evening inbox digest:"
+        items = self._as_of_now(items)
+        tracked = sum(1 for it in items if it.get("tracked"))
+        body = self._write_digest(items)
+        if body is None:                     # no editor: one plain line per email
+            lines = []
+            for it in items:
+                line = f"• {it['sender']} — “{it['subject']}”: {it['reason']}"
+                if it.get("tracked"):
+                    line += f" (tracking reply as {it['tracked']})"
+                elif it.get("since"):
+                    line += f" ({it['since']})"
+                lines.append(line)
+            body = "\n".join(lines)
+        if not body.strip():
+            return []
         footer = (f"\n\nI'm tracking {tracked} reply(ies) you owe — "
                   "they'll be in tomorrow's briefing too.") if tracked else ""
-        return [Notification(header + "\n" + "\n".join(lines) + footer)]
+        return [Notification("📬 Evening inbox digest:\n" + body + footer)]
+
+    @staticmethod
+    def _as_of_now(items: list) -> list:
+        """Re-read the day's notes against how things stand at send time. Each note was
+        written when its email arrived; by evening he may have answered, or the reply
+        she was tracking may be closed. The digest once said "tracking reply as #237"
+        two hours after she had closed #237 herself."""
+        try:
+            from skills.commitment_manager import get_open_commitments
+            open_ids = {f"#{c['id']}" for c in get_open_commitments()}
+        except Exception:
+            open_ids = None
+        service = None
+        try:
+            import email_backend
+            from skills.email_manager import get_gmail_service
+            service = None if email_backend.using_app_password() else get_gmail_service()
+        except Exception:
+            pass
+        import situation
+        out = []
+        for it in items:
+            it = dict(it)
+            if situation.replied_since(service, it.get("thread_id"), it.get("id")):
+                it["since"] = "you've replied since"
+            tracked = it.get("tracked", "")
+            if tracked.startswith("#") and open_ids is not None and tracked not in open_ids:
+                it["since"] = it.get("since") or "since handled, no longer tracked"
+            if it.get("since"):
+                it.pop("tracked", None)
+            out.append(it)
+        return out
+
+    DIGEST_PROMPT = """You are Aria, writing tonight's inbox digest for your user from the notes you
+made as each email arrived today. Notes are in arrival order and each was written without
+knowing what came after, so write the digest as things stand NOW:
+- One bullet per MATTER, not per email: several emails on one thread or about one thing
+  become one bullet giving the latest state. A later email overrides an earlier note.
+- "since" on a note means it was settled after the note was written (he replied, or the
+  item was closed): say it is done in a few words, or leave the matter out if nothing
+  about it is worth his attention any more. Never tell him to reply to something he has
+  answered, and never ask for a reply about something already on his calendar.
+- Only a note with "tracked" is a reply you are tracking; end that bullet with
+  "(tracking reply as <its tracked value>)". Never write that for any other note.
+- Put what needs him first. Keep every matter that still needs him or that he'd want to
+  know happened; never invent a detail that isn't in the notes, calendar or commitments.
+
+His standing rules — follow them:
+{rules}
+
+His calendar, next 30 days:
+{calendar}
+
+His open commitments:
+{commitments}
+
+Today's notes (JSON):
+{notes}
+
+Return ONLY raw JSON (no markdown): {{"bullets": ["<sender or company: what it is and where it stands>", ...]}}"""
+
+    def _write_digest(self, items: list):
+        """The digest body as bullets, or None to fall back to one line per email."""
+        try:
+            import situation
+            from instructions import render_for_prompt
+            notes = [{k: it[k] for k in ("at", "sender", "subject", "reason", "tracked", "since")
+                      if it.get(k)} for it in items]
+            from llm_router import reply_text
+            verdict = _parse_llm_json(reply_text(_get_llm().invoke(self.DIGEST_PROMPT.format(
+                rules=render_for_prompt() or "(none)", notes=json.dumps(notes, indent=2),
+                **situation.in_motion()))))
+            bullets = [str(b).strip() for b in verdict.get("bullets", []) if str(b).strip()]
+            # Every reply still being tracked must be named; otherwise don't trust it.
+            for it in items:
+                if it.get("tracked") and not any(it["tracked"] in b for b in bullets):
+                    return None
+            return "\n".join(f"• {b}" for b in bullets)
+        except Exception as e:
+            print(f"[engine] email-digest: digest editor unavailable ({e})")
+            return None
 
 
 class MomentMonitor(Monitor):
@@ -712,6 +802,19 @@ Return [] if none."""
 _BOOKING = re.compile(r"\b(schedule|book|set up|arrange|find a time|pick a time|rsvp)\b", re.I)
 
 
+def _fits_only(commitment: dict, proof: dict, open_items: dict) -> bool:
+    """The evidence shares at least two telling words with this item and more than with
+    any other open item. Sibling items ("Acme Interview 1", "Acme Interview 2") have no
+    word of their own, so the stricter names-it check could never close either; a tie
+    between siblings still closes neither."""
+    def tokens(text):
+        return EmailDigestMonitor._words(text) | set(re.findall(r'\b\d{1,2}\b', text))
+    seen = tokens(" ".join(str(proof.get(k, '')) for k in ('subject', 'snippet', 'from')))
+    score = {cid: len(tokens(c['description']) & seen) for cid, c in open_items.items()}
+    mine = score.get(commitment['id'], 0)
+    return mine >= 2 and all(mine > n for cid, n in score.items() if cid != commitment['id'])
+
+
 def reconcile(now: datetime = None) -> list:
     """Close open commitments his mail or calendar show are already handled, and say so.
     Returns the notifications. The model proposes; code checks every close: the evidence
@@ -724,10 +827,24 @@ def reconcile(now: datetime = None) -> list:
              if not c.get('recurring') and c['kind'] != 'people_date']
     if not items:
         return []
+    # A calendar invitation or payment request is answered in the app, never by email:
+    # one tracked before that rule existed is not a reply owed.
+    from email_filter import is_never_a_reply
+    early = []
+    for c in list(items):
+        if c['kind'] == 'reply_owed' and is_never_a_reply(c['description'].split(': ', 1)[-1]):
+            items.remove(c)
+            if commitment_manager.complete(c['id']) is not None:
+                early.append(Notification(
+                    f"✅ Stopped tracking: {c['description'][:90]} — a calendar invitation or "
+                    f"payment request isn't answered by email. If that's wrong, say so and "
+                    f"I'll reopen it."))
+    if not items:
+        return early
     sit = situation.around(items)
     shown = situation.render(items, sit)
     if not shown:
-        return []
+        return early
     listing = "\n".join(f"#{c['id']} [{c['kind']}] {c['description']}"
                         + (f" (due {c['due_date']})" if c.get('due_date') else "")
                         + f" (tracked since {(c.get('created_at') or '?')[:16]})" for c in items)
@@ -738,10 +855,10 @@ def reconcile(now: datetime = None) -> list:
                                     situation=shown))))
     except Exception as e:
         print(f"[engine] reconcile: no verdict ({e})")
-        return []
+        return early
 
     by_id = {c['id']: c for c in items}
-    notes = []
+    notes = early
     for item in proven if isinstance(proven, list) else []:
         try:
             cid = int(str(item.get('commitment_id', '')).lstrip('#'))
@@ -755,7 +872,10 @@ def reconcile(now: datetime = None) -> list:
             # An event closes an item about getting it booked, or a reply owed on the
             # thread that was arranging it. Never something to prepare for it.
             bookable = c['kind'] == 'reply_owed' or _BOOKING.search(c['description'])
-            proof = {'subject': event} if event and bookable else None
+            # Match on the title alone: the date and time in the line ("2:00 PM") must
+            # not count as the item's "Interview 2".
+            proof = ({'subject': event.split(' — ', 1)[-1], 'shown': event}
+                     if event and bookable else None)
             source = "your calendar"
         else:
             proof = next((m for m in sit["mail"].get(cid, [])
@@ -769,7 +889,8 @@ def reconcile(now: datetime = None) -> list:
                       else (proof or {}).get('who', '').split('<')[0].strip(' "'))
             proof = proof and {'subject': proof['subject'], 'snippet': proof['snippet'],
                                'from': proof['who']}
-        if not proof or not EmailDigestMonitor._email_names_it(c, proof, by_id):
+        if not proof or not (EmailDigestMonitor._email_names_it(c, proof, by_id)
+                             or _fits_only(c, proof, by_id)):
             print(f"[engine] reconcile: rejected close of #{cid} ({c['description']!r})")
             continue
         del by_id[cid]
@@ -777,7 +898,8 @@ def reconcile(now: datetime = None) -> list:
             continue
         notes.append(Notification(
             f"✅ Marked done: {c['description']} — {str(item.get('evidence', '')).strip()} "
-            f"({source}: “{proof['subject']}”). If that's wrong, say so and I'll reopen it."))
+            f"({source}: “{proof.get('shown') or proof['subject']}”). If that's wrong, say so and "
+            f"I'll reopen it."))
     return notes
 
 

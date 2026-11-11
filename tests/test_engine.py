@@ -3,6 +3,7 @@
 All Gmail/LLM/Telegram access is mocked; these run offline.
 Run: python3 -m unittest discover tests
 """
+import json
 import os
 import tempfile
 import unittest
@@ -65,6 +66,13 @@ class TempStateMixin:
         self._known = patch.object(situation, 'known_about', return_value={})
         self._known.start()
         self.addCleanup(self._known.stop)
+        # The digest's send-time pass reads his commitments, mail and a model: off by
+        # default, exercised in TestDigestAsOfNow.
+        for name, value in (('_as_of_now', staticmethod(lambda items: items)),
+                            ('_write_digest', lambda self, items: None)):
+            p = patch.object(engine.EmailDigestMonitor, name, value)
+            p.start()
+            self.addCleanup(p.stop)
         self.addCleanup(self._motion.stop)
 
     def tearDown(self):
@@ -703,6 +711,76 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
             self.assertEqual(mon.check(state), [])
 
 
+class TestDigestAsOfNow(unittest.TestCase):
+    """The 6 PM digest said "tracking reply as #237" two hours after she closed #237, and
+    gave one thread two bullets that contradicted each other: notes written as each email
+    arrived were sent without a second look."""
+
+    NOTES = [
+        {"sender": "Kim <kim@acme.example>", "subject": "Re: Acme next steps", "id": "m1",
+         "thread_id": "t1", "at": "Tue 9:00 AM", "tracked": "#7",
+         "reason": "Kim asks for your availability, so she is waiting on your reply."},
+        {"sender": "Kim <kim@acme.example>", "subject": "Re: Acme next steps", "id": "m2",
+         "thread_id": "t1", "at": "Tue 9:40 AM",
+         "reason": "Kim is scheduling the interview after your reply."},
+        {"sender": "Sam <sam@northwind.example>", "subject": "Quote", "id": "m3",
+         "thread_id": "t2", "at": "Tue 1:00 PM", "tracked": "#9",
+         "reason": "Sam sent the quote and asks if you want to go ahead."}]
+
+    def _as_of_now(self, open_ids, replied):
+        import situation
+        with patch('skills.commitment_manager.get_open_commitments',
+                   return_value=[{"id": i} for i in open_ids]), \
+             patch('skills.email_manager.get_gmail_service', return_value=MagicMock()), \
+             patch('email_backend.using_app_password', return_value=False), \
+             patch.object(situation, 'replied_since',
+                          side_effect=lambda svc, thread, mid: mid in replied):
+            return EmailDigestMonitor._as_of_now(self.NOTES)
+
+    def test_closed_or_answered_items_are_no_longer_tracked(self):
+        items = self._as_of_now(open_ids=[9], replied={"m1"})
+        self.assertNotIn("tracked", items[0])
+        self.assertEqual(items[0]["since"], "you've replied since")
+        self.assertEqual(items[2]["tracked"], "#9")           # still open, still tracked
+        self.assertNotIn("tracked", self._as_of_now(open_ids=[9], replied=set())[0])
+
+    def test_editor_writes_one_bullet_per_matter_and_sees_what_changed(self):
+        import situation
+        items = self._as_of_now(open_ids=[9], replied={"m1"})
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content=json.dumps({"bullets": [
+            "Sam (Northwind): sent the quote, waiting on your go-ahead (tracking reply as #9)",
+            "Kim (Acme): interview being scheduled after your reply; nothing needed"]}))
+        with patch.object(engine, '_get_llm', return_value=llm), \
+             patch.object(situation, 'in_motion', return_value={"calendar": "(nothing)",
+                                                                "commitments": "(none)"}), \
+             patch('instructions.render_for_prompt', return_value=""):
+            body = EmailDigestMonitor()._write_digest(items)
+        self.assertEqual(body.count("•"), 2)
+        prompt = llm.invoke.call_args[0][0]
+        self.assertIn("you've replied since", prompt)
+        self.assertIn("One bullet per MATTER", prompt)
+
+    def test_editor_that_drops_a_tracked_reply_is_not_trusted(self):
+        import situation
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content='{"bullets": ["Kim (Acme): all set"]}')
+        with patch.object(engine, '_get_llm', return_value=llm), \
+             patch.object(situation, 'in_motion', return_value={"calendar": "", "commitments": ""}), \
+             patch('instructions.render_for_prompt', return_value=""):
+            self.assertIsNone(EmailDigestMonitor()._write_digest(
+                self._as_of_now(open_ids=[9], replied=set())))
+
+    def test_he_replied_after_the_message_not_before(self):
+        import situation
+        service = MagicMock()
+        service.users.return_value.threads.return_value.get.return_value.execute.return_value = {
+            "messages": [{"id": "a", "labelIds": ["SENT"]}, {"id": "m1", "labelIds": ["INBOX"]},
+                         {"id": "b", "labelIds": ["SENT"]}, {"id": "m2", "labelIds": ["INBOX"]}]}
+        self.assertTrue(situation.replied_since(service, "t1", "m1"))
+        self.assertFalse(situation.replied_since(service, "t1", "m2"))
+
+
 class TestChaseMonitor(TempStateMixin, unittest.TestCase):
     OPEN = [{"id": 3, "description": "Reply to Rohan", "kind": "reply_owed", "who": "Rohan",
              "due_date": "2026-06-08", "due_time": None, "recurring": None,
@@ -1002,6 +1080,40 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
                 '[{"commitment_id": 2, "source": "mail", "quote": "Re: Northwind onboarding", "evidence": "replied"}]',
                 {"calendar": [], "mail": {2: [m]}})
             self.assertEqual(done, [])
+
+    def test_sibling_items_close_only_on_evidence_that_tells_them_apart(self):
+        import situation
+        base = {"who": "Kim", "due_date": None, "due_time": None, "recurring": None,
+                "status": "open", "source": "email", "kind": "reply_owed",
+                "created_at": "2026-11-03 10:00:00"}
+        items = [dict(base, id=1, description="Reply to Kim: Acme Interview 1"),
+                 dict(base, id=2, description="Reply to Kim: Acme Interview 2")]
+
+        def run(calendar, quote):
+            llm, done = MagicMock(), []
+            llm.invoke.return_value = MagicMock(content=json.dumps([
+                {"commitment_id": 2, "source": "calendar", "quote": quote, "evidence": "booked"}]))
+            with patch.object(situation, 'around', return_value={"calendar": calendar, "mail": {}}), \
+                 patch('skills.commitment_manager.get_open_commitments', return_value=list(items)), \
+                 patch('skills.commitment_manager.complete', side_effect=lambda cid: done.append(cid) or True), \
+                 patch('llm_router.get_llm', return_value=llm):
+                engine.reconcile(datetime(2026, 11, 10, 12, 0))
+            return done
+        self.assertEqual(run(["Thu Nov 5, 2:00 PM — Acme Interview 2"], "Acme Interview 2"), [2])
+        self.assertEqual(run(["Thu Nov 5, 2:00 PM — Acme Interview"], "Acme Interview"), [])
+
+    def test_an_invitation_tracked_as_a_reply_owed_is_dropped(self):
+        import situation
+        item = {"id": 8, "kind": "reply_owed", "who": "Jo", "recurring": None,
+                "description": "Reply to Jo: Invitation: Sam / Jo @ Tue Nov 3, 2026 1pm",
+                "due_date": None, "created_at": "2026-10-30 10:00:00"}
+        done = []
+        with patch.object(situation, 'around', return_value={"calendar": [], "mail": {}}), \
+             patch('skills.commitment_manager.get_open_commitments', return_value=[item]), \
+             patch('skills.commitment_manager.complete', side_effect=lambda cid: done.append(cid) or True):
+            notes = engine.reconcile(datetime(2026, 11, 10, 12, 0))
+        self.assertEqual(done, [8])
+        self.assertIn("Stopped tracking", notes[0].text)
 
     def test_invented_evidence_closes_nothing(self):
         sit = {"calendar": ["Thu Nov 12, 2:00 PM — Dentist"], "mail": {}}
