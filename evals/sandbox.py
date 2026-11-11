@@ -159,6 +159,11 @@ class Sandbox:
         self._start(memory, "recall", lambda message, n_results=5: str(
             self.overrides.get("search_memory", "")).strip())
         self._start(google_calendar, "CONFIG_PATH", os.path.join(d, "calendar_config.json"))
+        # list_commitments runs for real and would read his mail and calendar around each
+        # item: scenarios supply that picture ("situation" under tools) or get none.
+        import situation
+        self._start(situation, "describe", lambda commitments: str(
+            self.overrides.get("situation", "")).strip())
 
         # Subscription brain: throwaway session state, no Telegram alerts, fresh fallback.
         from pathlib import Path

@@ -599,7 +599,15 @@ def list_commitments(include_upcoming_only: bool = False, config: RunnableConfig
                 continue
             seen.add(c['id'])
             lines.append(format_line(c))
-        return "Open commitments:\n" + "\n".join(lines)
+        out = "Open commitments:\n" + "\n".join(lines)
+        if tok is None:          # owner only: it reads his mail and calendar
+            import situation
+            around = situation.describe([c for c in items if c['id'] in seen])
+            if around:
+                out += ("\n\nWhat his mail and calendar already show (the other moving parts "
+                        "of these items; read them before calling anything outstanding):\n"
+                        + around)
+        return out
     finally:
         if tok:
             reset_current_user(tok)

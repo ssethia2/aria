@@ -52,6 +52,8 @@ User-given persistent rules ("from now on…") are stored in `instructions.json`
 
 A daemon thread inside the bot runs pluggable `Monitor`s, each on its own interval, with quiet hours (23:00–08:00 queues non-urgent pings into a morning digest) and per-monitor state in `engine_state.json`. Every monitor call is exception-guarded so one failure never takes down the rest. See [ADR 0004](adr/0004-polling-engine-over-webhooks.md).
 
+**One task, many parts (`situation.py`).** A commitment row is only one moving part of a task; the reply he sent, the invite that came back and the event on his calendar are the others. `situation.around()` gathers the recent mail (sent and received) and the next 30 days of calendar around each open commitment, in a few batched Gmail calls. Everything that speaks about commitments reads it: `engine.reconcile()` closes items the evidence shows are handled (before every chase check and before the briefing lists what's due), the chase judge sees it before nudging, `list_commitments` returns it to the chat brain, and the email screener sees each email's thread so far plus the calendar and open commitments. The model proposes a close; code checks it: the evidence must exist and name the item, a reply must be his and newer than the item, and a calendar event only closes an item about getting it booked (or the reply owed on the thread that arranged it). Every close is announced with an offer to reopen.
+
 Everything Aria says on her own judgment passes one gate ([ADR 0009](adr/0009-moments-and-one-gate.md)): judgment pings ("nudges" — chase, insight, moments) share a daily budget, and every judge reads the same standing rules and the same 48-hour log of what she has already told him, so a rule binds every monitor and none repeats another. Reports (reminders he set, digests, results of actions) always go through. Engine messages reach the live conversation too, so he can answer an offer with "yes".
 
 | Monitor | What it does |
@@ -94,6 +96,7 @@ memory.py                Profile + ChromaDB semantic memory + memory tools
 people.py                People model
 instructions.py          Standing-instructions registry
 engine.py                Proactivity engine + all monitors
+situation.py             Mail and calendar around each open commitment (the task's other moving parts)
 moments.py               Anticipation layer: calendar moments, touchpoints, pre-heads-up legwork
 healthcheck.py           Self-diagnosis (doctor / tool / startup / monitor)
 heartbeat.py             External dead-man's-switch ping

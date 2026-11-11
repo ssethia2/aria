@@ -55,7 +55,8 @@ class TestScenarioFiles(unittest.TestCase):
                 e = t.get("expect") or {}
                 refs |= set(e.get("called", []) or []) | set(e.get("not_called", []) or [])
                 refs |= set(e.get("called_any", []) or []) | set((e.get("called_with") or {}))
-            missing = refs - tools
+            # "situation" isn't a tool: it's the mail and calendar list_commitments reads.
+            missing = refs - tools - {"situation"}
             self.assertFalse(missing, f"{s['id']} references unknown tools {missing}")
 
     def test_called_with_args_exist_on_the_tool(self):

@@ -80,6 +80,13 @@ def main():
             reminders.append({'task': f"🗓 {line}"})
     except Exception as e:
         print(f"Calendar fetch for briefing failed: {e}")
+    # Don't list as due what his mail or calendar show is already handled.
+    try:
+        from engine import reconcile
+        for note in reconcile():
+            send_telegram(note.text)
+    except Exception as e:
+        print(f"Reconcile before briefing failed: {e}")
     reminders += [{'task': format_line(c)} for c in get_due_commitments()]
     reminders += [{'task': f"(upcoming) {format_line(c)}"} for c in get_upcoming_commitments()]
 

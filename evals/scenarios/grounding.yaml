@@ -62,3 +62,30 @@
           Says the Porto→Lisbon flight is the TAP TP 202 on the TravelCo booking, not Northwind's
           QX12AB (Northwind is the December return), so Northwind isn't who changes it. Does NOT claim QX12AB
           covers Porto→Lisbon or that any email confirmed it. Asks at most one question.
+
+- id: moving-parts-one-task
+  why: "She told him he still owed a reply on an interview thread he had answered, with the interview already on his calendar: the commitment row was read alone, not with the mail and calendar around it."
+  setup:
+    commitments:
+      - {description: "Reply to Kim: Northwind interview scheduling", kind: reply_owed, who: Kim}
+      - {description: "Send Sam the Porto itinerary", kind: promise, who: Sam}
+  tools:
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #1 Reply to Kim: Northwind interview scheduling (tracked since {{today-3}}):
+          {{wd:today-3}}, received from Kim: “Northwind interview scheduling” — Could you share a few times that work next week?
+          {{wd:today-2}}, HE SENT to Kim: “Re: Northwind interview scheduling” — {{weekday:today+2}} at 2pm works for me.
+          {{wd:today-2}}, received from Kim: “Invitation: Northwind interview” — Confirmed, invite attached. See you then.
+
+      On his calendar, next 30 days:
+        {{wd:today+2}} {{monthday:today+2}}, 2:00 PM — Northwind interview
+  turns:
+    - user: "What do I still owe people?"
+      expect:
+        called: [list_commitments]
+        not_called: [complete_commitment]
+        judge: >
+          Says the Kim / Northwind thread is already handled: he replied and the interview
+          is on his calendar (mentions the day or 2 PM). Does NOT present a reply to Kim as
+          still owed. Presents the Porto itinerary for Sam as the thing still outstanding.
+          Offering to close the Kim item is fine; claiming to have closed it is not.

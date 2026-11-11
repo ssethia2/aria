@@ -402,7 +402,8 @@ def get_calendar_events(days: int = 1, calendar: str = 'both') -> str:
     return f"{label}:\n" + "\n".join(f"- {e}" for e in events)
 
 
-def fetch_events(days: int = 1, calendar: str = 'both', hours: int = None):
+def fetch_events(days: int = 1, calendar: str = 'both', hours: int = None,
+                 dated: bool = False):
     """Event lines for tools and the briefing. Returns None when the service isn't there.
 
     The window runs from now through the end of the day `days` ahead, or exactly `hours`
@@ -413,7 +414,8 @@ def fetch_events(days: int = 1, calendar: str = 'both', hours: int = None):
     one line, and events that exist ONLY on the shared calendar tagged '[shared only]' —
     per the user's rule those are Ashley's/joint events, and the tag preserves what the
     dedup used to erase. 'personal' / 'shared' scope to a single calendar (no dedup —
-    what's on that calendar is exactly what you get)."""
+    what's on that calendar is exactly what you get). dated=True adds the date to each
+    label ("Thu Nov 12, 2:00 PM"): a weekday alone is ambiguous past a week."""
     service = get_calendar_service()
     if not service:
         return None
@@ -454,9 +456,11 @@ def fetch_events(days: int = 1, calendar: str = 'both', hours: int = None):
     lines = []
     for e in sorted(found.values(), key=lambda x: x["when"]):   # chronological across cals
         if 'dateTime' in e["start"]:
-            label = datetime.fromisoformat(e["when"]).astimezone().strftime('%a %-I:%M %p')
+            label = datetime.fromisoformat(e["when"]).astimezone().strftime(
+                '%a %b %-d, %-I:%M %p' if dated else '%a %-I:%M %p')
         else:
-            label = datetime.fromisoformat(e["when"]).strftime('%a') + " (all day)"
+            label = (datetime.fromisoformat(e["when"]).strftime('%a %b %-d' if dated else '%a')
+                     + " (all day)")
         tag = " [shared only]" if (calendar == 'both' and e["cals"] == {'shared'}) else ""
         lines.append(f"{label} — {e['summary']}{tag}")
     return lines

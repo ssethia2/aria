@@ -54,6 +54,15 @@ class TempStateMixin:
         os.unlink(self._tmp.name)  # start with no state file
         self._patcher = patch.object(engine, 'STATE_PATH', self._tmp.name)
         self._patcher.start()
+        import situation
+        self._sit = patch.object(situation, 'around',
+                                 return_value={"calendar": [], "mail": {}})
+        self._sit.start()
+        self.addCleanup(self._sit.stop)
+        self._motion = patch.object(engine.EmailDigestMonitor, '_in_motion',
+                                    return_value=("(nothing)", "(none)"))
+        self._motion.start()
+        self.addCleanup(self._motion.stop)
 
     def tearDown(self):
         self._patcher.stop()
@@ -515,14 +524,16 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         # A recruiter he'd been writing to for a week was digested as "cold outreach he can
         # ignore per standing rules" — there was no such rule, and he'd replied.
         threads = MagicMock()
-        threads.get.return_value.execute.return_value = {
-            'messages': [{'labelIds': ['INBOX']}, {'labelIds': ['SENT']}]}
+        threads.get.return_value.execute.return_value = {'messages': [
+            {'id': 'a', 'labelIds': ['INBOX'], 'snippet': 'Can you do Thursday?'},
+            {'id': 'b', 'labelIds': ['SENT'], 'snippet': 'Thursday 2pm works'},
+            {'id': 'm1', 'labelIds': ['INBOX'], 'snippet': 'Invite sent'}]}
         service = MagicMock()
         service.users.return_value.threads.return_value = threads
-        self.assertTrue(EmailDigestMonitor._he_replied(service, 't1'))
-        threads.get.return_value.execute.return_value = {'messages': [{'labelIds': ['INBOX']}]}
-        self.assertFalse(EmailDigestMonitor._he_replied(service, 't1'))
-        self.assertFalse(EmailDigestMonitor._he_replied(None, 't1'))
+        earlier = EmailDigestMonitor._thread_so_far(service, 't1', 'm1')
+        self.assertEqual([m['direction'] for m in earlier], ['received', 'sent'])
+        self.assertEqual(earlier[1]['snippet'], 'Thursday 2pm works')
+        self.assertEqual(EmailDigestMonitor._thread_so_far(None, 't1'), [])
         _, _, _, prompt = self._screen_one("RE: Acme recruiting", "Kim <kim@acme.com>", '[]')
         self.assertIn('"he_replied_in_thread"', prompt)
         self.assertIn("Never cite", prompt)
@@ -908,6 +919,101 @@ class TestWeeklyReflectionMonitor(unittest.TestCase):
         mon = WeeklyReflectionMonitor(now_fn=self._sunday_eve)
         with patch.object(WeeklyReflectionMonitor, '_signal', return_value=""):
             self.assertEqual(mon.check({}), [])
+
+
+class TestReconcile(TempStateMixin, unittest.TestCase):
+    """She nudged him to schedule an interview already on his calendar, and to answer a
+    thread he had answered: the commitment row was judged alone."""
+
+    def _items(self):
+        base = {"who": None, "due_date": None, "due_time": None, "recurring": None,
+                "status": "open", "source": "chat", "created_at": "2026-11-03 10:00:00"}
+        return [dict(base, id=1, kind="promise", description="Schedule Acme interview"),
+                dict(base, id=2, kind="reply_owed", who="Kim",
+                     description="Reply to Kim: Northwind onboarding"),
+                dict(base, id=3, kind="promise", description="Prepare for Porto trip")]
+
+    def _run(self, verdict, sit):
+        import situation
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content=verdict)
+        done = []
+        with patch.object(situation, 'around', return_value=sit), \
+             patch('skills.commitment_manager.get_open_commitments', return_value=self._items()), \
+             patch('skills.commitment_manager.complete', side_effect=lambda cid: done.append(cid) or True), \
+             patch('llm_router.get_llm', return_value=llm):
+            notes = engine.reconcile(datetime(2026, 11, 10, 12, 0))
+        return done, notes, llm
+
+    def _mail(self, direction, subject, when):
+        return {'id': 'x', 'direction': direction, 'who': 'Kim <kim@northwind.example>',
+                'subject': subject, 'snippet': 'sounds good', 'hits': 1,
+                'ts': datetime.fromisoformat(when).timestamp()}
+
+    def test_calendar_event_closes_a_scheduling_item(self):
+        sit = {"calendar": ["Thu Nov 12, 2:00 PM — Acme interview"], "mail": {}}
+        done, notes, llm = self._run(
+            '[{"commitment_id": 1, "source": "calendar", "quote": "Acme interview", "evidence": "already booked"}]', sit)
+        self.assertEqual(done, [1])
+        self.assertIn("your calendar", notes[0].text)
+        self.assertIn("reopen", notes[0].text)
+        self.assertIn("Thu Nov 12, 2:00 PM — Acme interview", llm.invoke.call_args[0][0])
+
+    def test_calendar_event_never_closes_something_to_prepare(self):
+        sit = {"calendar": ["Sat Nov 14 (all day) — Porto trip"], "mail": {}}
+        done, _, _ = self._run(
+            '[{"commitment_id": 3, "source": "calendar", "quote": "Porto trip", "evidence": "on calendar"}]', sit)
+        self.assertEqual(done, [])
+
+    def test_his_later_reply_closes_a_reply_owed(self):
+        sit = {"calendar": [], "mail": {2: [self._mail('sent', 'Re: Northwind onboarding', '2026-11-05 09:00:00')]}}
+        done, notes, _ = self._run(
+            '[{"commitment_id": 2, "source": "mail", "quote": "Re: Northwind onboarding", "evidence": "he replied"}]', sit)
+        self.assertEqual(done, [2])
+        self.assertIn("your email", notes[0].text)
+
+    def test_booked_event_closes_the_reply_owed_that_arranged_it(self):
+        # He answered, they confirmed and sent the invite, and the screener then tracked
+        # the confirmation as a new reply owed.
+        sit = {"calendar": ["Mon Nov 16, 1:00 PM — Northwind onboarding call"], "mail": {}}
+        done, notes, _ = self._run(
+            '[{"commitment_id": 2, "source": "calendar", "quote": "Northwind onboarding call", "evidence": "booked"}]', sit)
+        self.assertEqual(done, [2])
+
+    def test_received_or_older_mail_is_not_his_reply(self):
+        for m in (self._mail('received', 'Re: Northwind onboarding', '2026-11-05 09:00:00'),
+                  self._mail('sent', 'Re: Northwind onboarding', '2026-11-01 09:00:00')):
+            done, _, _ = self._run(
+                '[{"commitment_id": 2, "source": "mail", "quote": "Re: Northwind onboarding", "evidence": "replied"}]',
+                {"calendar": [], "mail": {2: [m]}})
+            self.assertEqual(done, [])
+
+    def test_invented_evidence_closes_nothing(self):
+        sit = {"calendar": ["Thu Nov 12, 2:00 PM — Dentist"], "mail": {}}
+        done, _, _ = self._run(
+            '[{"commitment_id": 1, "source": "calendar", "quote": "Acme interview", "evidence": "booked"}]', sit)
+        self.assertEqual(done, [])
+
+    def test_no_evidence_means_no_model_call(self):
+        done, notes, llm = self._run('[]', {"calendar": [], "mail": {}})
+        self.assertEqual((done, notes), ([], []))
+        llm.invoke.assert_not_called()
+
+    def test_chase_judge_sees_mail_and_calendar(self):
+        import situation
+        mon = ChaseMonitor(now_fn=lambda: datetime(2026, 11, 10, 14, 0))
+        llm = MagicMock()
+        llm.invoke.return_value = MagicMock(content='{"send": false}')
+        with patch('skills.commitment_manager.get_open_commitments', return_value=self._items()), \
+             patch('skills.commitment_manager.slip_counts', return_value={}), \
+             patch.object(engine, 'reconcile', return_value=[]), \
+             patch.object(situation, 'describe', return_value="On his calendar: Acme interview"), \
+             patch.object(engine, '_get_llm', return_value=llm):
+            mon.check({})
+        prompt = llm.invoke.call_args[0][0]
+        self.assertIn("On his calendar: Acme interview", prompt)
+        self.assertIn("one moving part", prompt)
+
 
 
 if __name__ == '__main__':

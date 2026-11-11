@@ -252,6 +252,20 @@ warrant a reply, so the user can judge.
 alert_now = TRUE only when one of his standing rules says to alert him immediately about
 this kind of email.
 
+An email is usually one moving part of something already in motion, so read it against
+what's there: "earlier_in_thread" is the conversation so far (his own messages marked
+"sent"), and his calendar and open commitments are below. If the email confirms or
+continues something already on his calendar or already tracked, say that in the reason
+("confirms the Acme interview already on your calendar for Thu 2 PM") and don't ask for a
+reply he has already given or an action already done. If it CHANGES something (a new time,
+a cancellation, a new ask), say what changed.
+
+His calendar, next 30 days:
+{calendar}
+
+His open commitments:
+{commitments}
+
 Emails (JSON):
 {emails}
 
@@ -415,18 +429,38 @@ Return [] if none — that should be the common case."""
         return notes
 
     @staticmethod
-    def _he_replied(service, thread_id) -> bool:
-        """Has he sent anything on this thread? A recruiter he'd been writing to for a week
-        was digested as "cold outreach he can ignore": the screener couldn't tell a bump on
-        an ignored thread from a process he's in."""
+    def _thread_so_far(service, thread_id, message_id=None) -> list:
+        """The thread's earlier messages, oldest first: [{"direction", "snippet"}]. A
+        recruiter he'd been writing to for a week was digested as "cold outreach he can
+        ignore", and an invite answering his own reply read as a fresh ask: the screener
+        saw each email alone."""
         if not (service and thread_id):
-            return False
+            return []
         try:
             thread = service.users().threads().get(
-                userId='me', id=thread_id, format='minimal').execute()
-            return any('SENT' in (m.get('labelIds') or []) for m in thread.get('messages', []))
+                userId='me', id=thread_id, format='metadata',
+                metadataHeaders=['From']).execute()
+            return [{'direction': 'sent' if 'SENT' in (m.get('labelIds') or []) else 'received',
+                     'snippet': (m.get('snippet') or '')[:200]}
+                    for m in thread.get('messages', []) if m.get('id') != message_id][-4:]
         except Exception:
-            return False
+            return []
+
+    @staticmethod
+    def _in_motion() -> tuple:
+        """(calendar lines, open commitment lines) for the screener."""
+        calendar, commitments = [], []
+        try:
+            from skills.google_calendar import fetch_events
+            calendar = fetch_events(days=30, dated=True) or []
+        except Exception as e:
+            print(f"[engine] email-digest: calendar unavailable: {e}")
+        try:
+            from skills.commitment_manager import get_open_commitments, format_line
+            commitments = [format_line(c) for c in get_open_commitments()]
+        except Exception as e:
+            print(f"[engine] email-digest: commitments unavailable: {e}")
+        return ("\n".join(calendar) or "(nothing)", "\n".join(commitments) or "(none)")
 
     def _screen_new_mail(self, state: dict):
         import email_backend
@@ -476,15 +510,21 @@ Return [] if none — that should be the common case."""
             return []
 
         for e in emails:
-            e['he_replied_in_thread'] = self._he_replied(
-                service if not email_backend.using_app_password() else None, e.pop('thread_id', None))
+            earlier = self._thread_so_far(
+                service if not email_backend.using_app_password() else None,
+                e.pop('thread_id', None), e['id'])
+            e['he_replied_in_thread'] = any(m['direction'] == 'sent' for m in earlier)
+            if earlier:
+                e['earlier_in_thread'] = earlier
+        calendar, commitments = self._in_motion()
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
         # His standing rules ("never track apartment emails as replies owed", "alert me right
         # away about interview invites") used to reach only the chat agent, so the screener
         # kept doing exactly what he'd told Aria not to.
         from instructions import render_for_prompt
         response = _get_llm().invoke(self.SCREEN_PROMPT.format(
-            rules=render_for_prompt() or "(none)", emails=json.dumps(emails, indent=2)))
+            rules=render_for_prompt() or "(none)", emails=json.dumps(emails, indent=2),
+            calendar=calendar, commitments=commitments))
         content = response.content
         if isinstance(content, list):
             content = next((b['text'] for b in content
@@ -687,6 +727,105 @@ you found that he doesn't already have.
         return Notification(f"{self.ICON[m.kind]} {message}", kind="nudge")
 
 
+RECONCILE_PROMPT = """You check whether the user's open commitments are ALREADY HANDLED, judging
+from his own mail and calendar. Each commitment is one moving part of a task; the reply he
+sent, the invite that followed and the event on his calendar are the other parts.
+
+Today: {today}
+
+Open commitments:
+{commitments}
+
+{situation}
+
+A commitment is DONE only when the evidence shows THAT commitment complete:
+- a "reply to X" item: he SENT a message to X on that matter after the item was tracked,
+  or the thing that thread was arranging is now on his calendar (cite the calendar event:
+  the exchange concluded, nothing is left to answer);
+- a "schedule / book / set up X" item: the event is on his calendar, or a confirmation of
+  the booking arrived;
+- any item: he says he did it in a sent email, a confirmation of it arrived, or the next
+  stage happened that can't happen until it's done.
+NOT done: mail merely about the same topic, a reminder, an invitation to start, his reply
+that leaves the thing itself still to do, or an event that is the thing he must PREPARE
+for. When in doubt, it is not done.
+
+Return ONLY a raw JSON array (no markdown), one object per commitment shown done:
+[{{"commitment_id": <number>, "source": "mail" or "calendar", "quote": "<the email subject or the calendar event title, copied exactly>", "evidence": "<what it shows, a few words, written TO him: 'you', 'your'>"}}]
+Return [] if none."""
+
+_BOOKING = re.compile(r"\b(schedule|book|set up|arrange|find a time|pick a time|rsvp)\b", re.I)
+
+
+def reconcile(now: datetime = None) -> list:
+    """Close open commitments his mail or calendar show are already handled, and say so.
+    Returns the notifications. The model proposes; code checks every close: the evidence
+    must exist, must name the item, a reply must be his and newer than the item, and a
+    calendar event only closes an item that was about getting it booked."""
+    import situation
+    from skills import commitment_manager
+    now = now or datetime.now()
+    items = [c for c in commitment_manager.get_open_commitments()
+             if not c.get('recurring') and c['kind'] != 'people_date']
+    if not items:
+        return []
+    sit = situation.around(items)
+    shown = situation.render(items, sit)
+    if not shown:
+        return []
+    listing = "\n".join(f"#{c['id']} [{c['kind']}] {c['description']}"
+                        + (f" (due {c['due_date']})" if c.get('due_date') else "")
+                        + f" (tracked since {(c.get('created_at') or '?')[:16]})" for c in items)
+    from llm_router import get_llm, reply_text
+    try:
+        proven = _parse_llm_json(reply_text(get_llm(tier="standard").invoke(
+            RECONCILE_PROMPT.format(today=now.strftime('%A %Y-%m-%d'), commitments=listing,
+                                    situation=shown))))
+    except Exception as e:
+        print(f"[engine] reconcile: no verdict ({e})")
+        return []
+
+    by_id = {c['id']: c for c in items}
+    notes = []
+    for item in proven if isinstance(proven, list) else []:
+        try:
+            cid = int(str(item.get('commitment_id', '')).lstrip('#'))
+        except ValueError:
+            continue
+        c, quote = by_id.get(cid), str(item.get('quote', '')).strip().lower()
+        if not c or not quote:
+            continue
+        if item.get('source') == 'calendar':
+            event = next((e for e in sit["calendar"] if quote in e.lower()), None)
+            # An event closes an item about getting it booked, or a reply owed on the
+            # thread that was arranging it. Never something to prepare for it.
+            bookable = c['kind'] == 'reply_owed' or _BOOKING.search(c['description'])
+            proof = {'subject': event} if event and bookable else None
+            source = "your calendar"
+        else:
+            proof = next((m for m in sit["mail"].get(cid, [])
+                          if quote in m['subject'].lower() or m['subject'].lower() in quote), None)
+            created = (c.get('created_at') or '')[:19]
+            if proof and c['kind'] == 'reply_owed' and not (
+                    proof['direction'] == 'sent' and created
+                    and proof['ts'] > datetime.fromisoformat(created).timestamp()):
+                proof = None
+            source = ("your email" if proof and proof['direction'] == 'sent'
+                      else (proof or {}).get('who', '').split('<')[0].strip(' "'))
+            proof = proof and {'subject': proof['subject'], 'snippet': proof['snippet'],
+                               'from': proof['who']}
+        if not proof or not EmailDigestMonitor._email_names_it(c, proof, by_id):
+            print(f"[engine] reconcile: rejected close of #{cid} ({c['description']!r})")
+            continue
+        del by_id[cid]
+        if commitment_manager.complete(cid) is None:
+            continue
+        notes.append(Notification(
+            f"✅ Marked done: {c['description']} — {str(item.get('evidence', '')).strip()} "
+            f"({source}: “{proof['subject']}”). If that's wrong, say so and I'll reopen it."))
+    return notes
+
+
 class ChaseMonitor(Monitor):
     """The chase loop: judgment-based nudges so open commitments don't quietly age out.
 
@@ -713,6 +852,12 @@ offer one concrete thing you can do about it (block time on his calendar, draft 
 pick a real date). Mention at most two other items, briefly. No stock greeting, no "on my
 radar", nothing that reads like a status report — and zero nagging tone.
 
+A commitment is one moving part of a task; his mail and calendar below hold the others.
+Read them together before deciding. If they show an item is handled or already moving (he
+replied and is waiting on them, the meeting is booked, the next step is on his calendar),
+do NOT nudge him to do it. If you mention such an item at all, say where it actually
+stands ("the Acme interview is set for Thursday 2 PM; nothing owed there").
+
 His standing rules — follow them; they override the guidance above:
 {rules}
 
@@ -722,6 +867,8 @@ Already told him in the last two days (don't repeat it):
 Today: {today}
 Open commitments (JSON):
 {commitments}
+
+{situation}
 
 Return ONLY raw JSON (no markdown):
 {{"send": true/false, "message": "<the message, or empty>", "commitment_ids": [<ids referenced>]}}"""
@@ -735,9 +882,19 @@ Return ONLY raw JSON (no markdown):
         if not (10 <= now.hour < 21):
             return []  # daytime judgment only; mornings belong to the briefing
         today = now.strftime('%Y-%m-%d')
+        # First close what his mail and calendar show is already handled: nudging him to
+        # "schedule the interview" that sits on his calendar is the failure this prevents.
+        try:
+            closed = reconcile(now)
+        except Exception as e:
+            print(f"[engine] chase: reconcile failed: {e}")
+            closed = []
         if state.get("nudge_sent_date") == today:
-            return []  # at most one nudge per day
+            return closed  # at most one nudge per day
 
+        return closed + self._nudge(state, now, today)
+
+    def _nudge(self, state: dict, now: datetime, today: str) -> list:
         from skills.commitment_manager import get_open_commitments, slip_counts
         open_ = get_open_commitments()
         # Snoozed items are exactly "stop bugging me until X" — honor it here.
@@ -759,9 +916,12 @@ Return ONLY raw JSON (no markdown):
             c["times_rescheduled"] = slips.get(c["id"], 0)
 
         rules, told = judgment_context()
+        import situation
         response = _get_llm().invoke(
             self.PROMPT.format(today=today, commitments=json.dumps(open_, indent=2),
-                               rules=rules, told=told))
+                               rules=rules, told=told,
+                               situation=situation.describe(open_) or
+                               "(nothing in his mail or calendar about these)"))
         content = response.content
         if isinstance(content, list):
             content = next((b['text'] for b in content
