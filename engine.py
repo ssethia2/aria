@@ -791,6 +791,9 @@ A commitment is DONE only when the evidence shows THAT commitment complete:
   the booking arrived;
 - any item: he says he did it in a sent email, a confirmation of it arrived, or the next
   stage happened that can't happen until it's done.
+A reply owed to one person is not settled by something arranged with someone else at the
+same company: a recruiter's follow-up still wants an answer after the coordinator has
+booked the interview.
 NOT done: mail merely about the same topic, a reminder, an invitation to start, his reply
 that leaves the thing itself still to do, or an event that is the thing he must PREPARE
 for. When in doubt, it is not done.
@@ -871,7 +874,10 @@ def reconcile(now: datetime = None) -> list:
             event = next((e for e in sit["calendar"] if quote in e.lower()), None)
             # An event closes an item about getting it booked, or a reply owed on the
             # thread that was arranging it. Never something to prepare for it.
-            bookable = c['kind'] == 'reply_owed' or _BOOKING.search(c['description'])
+            # Only a reply the screener guessed at (source 'email'): one he asked to
+            # track himself closes on his sent mail, nothing less.
+            bookable = ((c['kind'] == 'reply_owed' and c.get('source') == 'email')
+                        or _BOOKING.search(c['description']))
             # Match on the title alone: the date and time in the line ("2:00 PM") must
             # not count as the item's "Interview 2".
             proof = ({'subject': event.split(' — ', 1)[-1], 'shown': event}

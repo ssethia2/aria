@@ -1022,7 +1022,7 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
         base = {"who": None, "due_date": None, "due_time": None, "recurring": None,
                 "status": "open", "source": "chat", "created_at": "2026-11-03 10:00:00"}
         return [dict(base, id=1, kind="promise", description="Schedule Acme interview"),
-                dict(base, id=2, kind="reply_owed", who="Kim",
+                dict(base, id=2, kind="reply_owed", who="Kim", source="email",
                      description="Reply to Kim: Northwind onboarding"),
                 dict(base, id=3, kind="promise", description="Prepare for Porto trip")]
 
@@ -1072,6 +1072,23 @@ class TestReconcile(TempStateMixin, unittest.TestCase):
         done, notes, _ = self._run(
             '[{"commitment_id": 2, "source": "calendar", "quote": "Northwind onboarding call", "evidence": "booked"}]', sit)
         self.assertEqual(done, [2])
+
+    def test_a_reply_he_asked_to_track_is_not_closed_by_a_calendar_event(self):
+        # The coordinator booked the interview; he still owes the recruiter an answer.
+        import situation
+        item = {"id": 5, "kind": "reply_owed", "who": "Kim", "recurring": None, "source": "chat",
+                "description": "Reply to Kim: Northwind next steps", "due_date": None,
+                "created_at": "2026-11-09 10:00:00"}
+        llm, done = MagicMock(), []
+        llm.invoke.return_value = MagicMock(content=(
+            '[{"commitment_id": 5, "source": "calendar", "quote": "Northwind interview", "evidence": "booked"}]'))
+        with patch.object(situation, 'around', return_value={
+                 "calendar": ["Mon Nov 16, 1:00 PM — Northwind interview"], "mail": {}}), \
+             patch('skills.commitment_manager.get_open_commitments', return_value=[item]), \
+             patch('skills.commitment_manager.complete', side_effect=lambda cid: done.append(cid) or True), \
+             patch('llm_router.get_llm', return_value=llm):
+            engine.reconcile(datetime(2026, 11, 10, 12, 0))
+        self.assertEqual(done, [])
 
     def test_received_or_older_mail_is_not_his_reply(self):
         for m in (self._mail('received', 'Re: Northwind onboarding', '2026-11-05 09:00:00'),
