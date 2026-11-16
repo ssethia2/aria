@@ -339,8 +339,8 @@ def judge_fields(judge: str, given: dict, today: date) -> dict:
         elif name == "guide":
             fields[name] = situation.MAIL_GUIDE
         elif name == "today":
-            fields[name] = (today.strftime('%A %Y-%m-%d') if judge == "reconcile"
-                            else today.isoformat())
+            fields[name] = (today.isoformat() if judge == "chase"
+                            else today.strftime('%A %Y-%m-%d'))
         elif name == "now":
             fields[name] = f"{today.strftime('%a')} {today.day} {today.strftime('%b')}, 10:00 AM"
         elif name == "when":

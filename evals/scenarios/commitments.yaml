@@ -187,3 +187,16 @@
         reply_not_matches:
           - "(want|should) (me|i) (to )?(drop|clear|remove|close)"
           - "or just some"
+
+- id: waiting-on-someone-is-tracked-as-their-move
+  why: "She could only track what he owed. 'I'm waiting on Sam' had nowhere to go, so the follow-up was his to remember."
+  turns:
+    - user: "I'm waiting on Sam to send over the signed contract, keep an eye on it"
+      expect:
+        called_with:
+          add_commitment: {kind: waiting_on, who: {contains: Sam}}
+        db:
+          open_count: 1
+          items:
+            - {match: contract, status: open, kind: waiting_on}
+

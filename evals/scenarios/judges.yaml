@@ -276,7 +276,7 @@
       - {at: "{{wd:today}} 9:10 AM", sender: "Sam Rivera <sam@acme.example>", subject: "Next steps with Acme", reason: "Recruiter asks you to pick an interview slot; may need a reply.", since: "you've replied since"}
       - {at: "{{wd:today}} 11:40 AM", sender: "Jo Park <jo.park@acme.example>", subject: "Schedule your technical interview", reason: "Coordinator's link to book the technical interview."}
       - {at: "{{wd:today}} 1:15 PM", sender: "Jo Park <jo.park@acme.example>", subject: "Confirmed: your technical interview with Acme", reason: "Confirms the technical interview for {{weekday:today+3}} at 2 PM."}
-      - {at: "{{wd:today}} 3:30 PM", sender: "Kim Lee <kim@example.com>", subject: "Dinner on Saturday?", reason: "Kim asks if you're free Saturday evening; needs a reply.", tracked: "#22"}
+      - {at: "{{wd:today}} 3:30 PM", sender: "Kim Lee <kim@example.com>", subject: "Dinner on Saturday?", reason: "Kim asks if you're free Saturday evening; needs a reply.", tracked: "tracking reply as #22"}
   expect:
     count: {of: bullets, min: 2, max: 2}
     text_matches: ["tracking reply as #22"]
@@ -362,3 +362,121 @@
   expect:
     verdict: {send: true}
     text_matches: ["dentist", "interview|Acme"]
+
+# ---- deadlines an email states --------------------------------------------------------------
+
+- id: screen-captures-a-deadline-the-email-states
+  judge: email-screen
+  why: "An email that said 'complete it by Friday' was flagged for the digest and then forgotten: nothing tracked the date."
+  fields:
+    emails:
+      - id: m1
+        sender: "Acme Hiring <hiring@acme.example>"
+        subject: "Your Acme coding assessment"
+        snippet: "Thanks for applying. The next step is a 90 minute coding assessment."
+        text: "Thanks for applying. The next step is a 90 minute coding assessment. Please complete it by {{longdate:today+4}}. The link below stays active until then."
+        he_replied_in_thread: false
+        you_remember: "[{{today-3}}] He applied to Acme for the platform engineer role."
+  expect:
+    items:
+      - {where: {id: m1}, has: {needs_reply: false}}
+    text_matches: ['"date": ?"{{today+4}}"', "complete it by"]
+
+- id: screen-invents-no-deadline
+  judge: email-screen
+  why: "She once put made-up due dates on replies and presented them as real. No stated date means no date."
+  fields:
+    emails:
+      - id: m1
+        sender: "Sam Rivera <sam@northwind.example>"
+        subject: "Re: Next steps with Northwind"
+        snippet: "Could you send me a few times that work for a call with the hiring manager?"
+        text: "Could you send me a few times that work for a call with the hiring manager? Looking forward to it."
+        he_replied_in_thread: true
+        earlier_in_thread:
+          - {direction: sent, snippet: "Yes, I'd like to hear more. Happy to talk."}
+  expect:
+    items:
+      - {where: {id: m1}, has: {needs_reply: true, deadline: null}}
+
+# ---- mail he sent: promises made, answers awaited -------------------------------------------
+
+- id: sent-mail-catches-a-promise-with-its-date
+  judge: sent-mail
+  why: "Promises he makes in email were never tracked; sent mail was read only as proof something was done."
+  fields:
+    emails:
+      - {id: s1, to: "Kim Lee <kim@example.com>", subject: "Re: Porto itinerary", text: "Hi Kim, good call yesterday. I'll send you the full itinerary by {{weekday:today+3}}. Talk soon."}
+  expect:
+    count: 1
+    items:
+      - {where: {email_id: s1}, has: {type: promise, due: "{{today+3}}", quote: {contains: "send you the full itinerary"}}}
+
+- id: sent-mail-catches-what-he-is-waiting-for
+  judge: sent-mail
+  why: "She tracked what he owed and never what he was owed, so follow-ups he meant to send were forgotten."
+  fields:
+    emails:
+      - {id: s1, to: "Sam Rivera <sam@northwind.example>", subject: "Re: Offer details", text: "Thanks Sam. Before I decide, could you confirm the start date and whether relocation is covered?"}
+  expect:
+    count: {min: 1, max: 2}
+    items:
+      - {where: {email_id: s1}, has: {type: waiting}}
+
+- id: sent-mail-ignores-pleasantries-and-what-is-already-done
+  judge: sent-mail
+  why: "Tracking 'let's catch up sometime' or a file he already attached would bury the real promises."
+  fields:
+    commitments: "#5 Send Kim the lease documents"
+    emails:
+      - {id: s1, to: "Jo Park <jo.park@acme.example>", subject: "Re: Technical interview", text: "Thanks Jo, {{weekday:today+2}} at 2 PM works. See you then."}
+      - {id: s2, to: "Kim Lee <kim@example.com>", subject: "Photos", text: "Here are the photos from the weekend, attached. Let's catch up sometime soon!"}
+      - {id: s3, to: "Kim Lee <kim@example.com>", subject: "Lease", text: "I'll send the lease documents over tomorrow."}
+  expect:
+    count: 0
+
+# ---- waiting on someone else ---------------------------------------------------------------
+
+- id: reconcile-their-answer-closes-a-wait
+  judge: reconcile
+  why: "A thing he is waiting on is done when they write back, and that arrival is worth telling him."
+  fields:
+    commitments: "#20 [waiting_on] Waiting on Sam Rivera: answer on the start date (tracked since {{today-3}} 10:00)"
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #20 Waiting on Sam Rivera: answer on the start date (tracked since {{today-3}}):
+          {{day:today-3}}, HE SENT to Sam Rivera: “Re: Offer details” — Could you confirm the start date and whether relocation is covered?
+          {{day:today-1}}, received from Sam Rivera: “Re: Offer details” — The start date is flexible, any Monday in January. Relocation is covered up to the standard package.
+  expect:
+    count: 1
+    items:
+      - {where: {commitment_id: 20}, has: {source: mail}}
+
+- id: reconcile-his-own-follow-up-does-not-end-a-wait
+  judge: reconcile
+  why: "For a wait, his own message is not the answer; only theirs is."
+  fields:
+    commitments: "#20 [waiting_on] Waiting on Sam Rivera: answer on the start date (tracked since {{today-5}} 10:00)"
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #20 Waiting on Sam Rivera: answer on the start date (tracked since {{today-5}}):
+          {{day:today-5}}, HE SENT to Sam Rivera: “Re: Offer details” — Could you confirm the start date and whether relocation is covered?
+          {{day:today-1}}, HE SENT to Sam Rivera: “Re: Offer details” — Hi Sam, just checking in on the start date question.
+  expect:
+    count: 0
+
+- id: chase-offers-a-follow-up-on-a-quiet-wait
+  judge: chase
+  why: "A wait is the other person's move: she must never tell him to do it, only offer to chase them."
+  fields:
+    commitments:
+      - {id: 20, description: "Waiting on Sam Rivera: answer on the start date", kind: waiting_on, who: "Sam Rivera", due_date: null, source: sent, created_at: "{{today-6}} 10:00:00", last_nudged: null, times_rescheduled: 0}
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #20 Waiting on Sam Rivera: answer on the start date (tracked since {{today-6}}):
+          {{day:today-6}}, HE SENT to Sam Rivera: “Re: Offer details” — Could you confirm the start date and whether relocation is covered?
+  expect:
+    verdict: {send: true}
+    text_matches: ["Sam"]
+    judge: "The message says Sam hasn't answered about the start date and offers to draft a follow-up (or a nudge) to Sam. It does not tell him that HE owes Sam anything."
+

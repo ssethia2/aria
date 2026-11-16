@@ -35,7 +35,18 @@ def _scope():
     guest), so this is the same predicate for everyone — no privileged unscoped path."""
     return "tenant = ?", [get_current_user()]
 
-VALID_KINDS = {'reply_owed', 'deadline', 'people_date', 'promise'}
+# 'waiting_on' is the one kind that is someone ELSE's move: a reply, a document or a
+# decision he is owed.
+VALID_KINDS = {'reply_owed', 'deadline', 'people_date', 'promise', 'waiting_on'}
+
+# Where an item came from decides how hard it is held. 'chat': he asked for it, so it is
+# firm. 'email' (read off incoming mail) and 'sent' (read off mail he sent) were picked up
+# by the background side on its own: soft, they lapse when nothing happens.
+SOFT_SOURCES = {'email', 'sent'}
+
+
+def is_soft(c) -> bool:
+    return c.get('source') in SOFT_SOURCES
 
 
 def _conn():
@@ -536,7 +547,9 @@ def add_commitment(description: str, kind: str = 'promise', who: str = None,
     Args:
         description: What needs to happen (e.g. "Reply to Rohan", "Renew passport",
             "Check in with HubSpot on my PERM filing").
-        kind: One of 'reply_owed', 'deadline', 'people_date', 'promise'.
+        kind: One of 'reply_owed', 'deadline', 'people_date', 'promise', or 'waiting_on'
+            (something someone ELSE owes him: he's waiting on their reply, a document, a
+            decision; set `who`, and describe what he's waiting for).
         who: The person/org involved, if any.
         due_date_iso: Due date YYYY-MM-DD (compute from "tomorrow"/"Friday"). For a
             recurring reminder this is the FIRST occurrence. Omit if genuinely undated.
@@ -593,13 +606,15 @@ def list_commitments(include_upcoming_only: bool = False, config: RunnableConfig
             else get_open_commitments()
         if not items:
             return "No open commitments — all clear."
-        seen, lines = set(), []
+        seen, lines, waiting = set(), [], []
         for c in sorted(items, key=lambda x: (x['due_date'] is None, x['due_date'] or '', x['id'])):
             if c['id'] in seen:
                 continue
             seen.add(c['id'])
-            lines.append(format_line(c))
-        out = "Open commitments:\n" + "\n".join(lines)
+            (waiting if c['kind'] == 'waiting_on' else lines).append(format_line(c))
+        out = "Open commitments:\n" + ("\n".join(lines) or "(none of his own)")
+        if waiting:
+            out += ("\n\nWaiting on others (their move, not his):\n" + "\n".join(waiting))
         if tok is None:          # owner only: it reads his mail and calendar
             import situation
             around = situation.describe([c for c in items if c['id'] in seen])

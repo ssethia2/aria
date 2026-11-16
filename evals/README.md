@@ -105,7 +105,7 @@ that every scenario parses, references real tools and args, and resolves its tem
 The chat agent is half of Aria. The other half is a set of single questions her engine
 puts to a model on its own: is this email worth flagging, does it prove a commitment done,
 is this commitment already handled, is a nudge worth sending, what goes in tonight's
-digest. Those judges caused most real misbehavior and had no behavior tests, because a
+digest, what did he promise or ask for in mail he just sent. Those judges caused most real misbehavior and had no behavior tests, because a
 chat scenario never reaches them.
 
 A scenario with `judge:` (in `evals/scenarios/judges.yaml`) gives one judge exactly what

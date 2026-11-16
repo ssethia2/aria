@@ -620,6 +620,66 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
             out = mon.check(state)
         return out, state, add, llm.invoke.call_args_list[0][0][0]
 
+    # --- a deadline the email states ---
+
+    def _screen_dated(self, snippet, verdict, open_items=()):
+        service = self._mail(inbox=[('m1', "Your Acme assessment", "Acme Hiring <hiring@acme.com>",
+                                     snippet)])
+        llm = MagicMock()
+        llm.invoke.side_effect = [MagicMock(content=json.dumps(verdict)), MagicMock(content='[]')]
+        mon = EmailDigestMonitor(now_fn=lambda: datetime(2026, 10, 30, 12, 0))   # a Friday
+        state = {}
+        with patch('skills.email_manager.get_gmail_service', return_value=service), \
+             patch.object(engine, '_get_llm', return_value=llm), \
+             patch('email_backend.using_app_password', return_value=False), \
+             patch('skills.commitment_manager.get_open_commitments', return_value=list(open_items)), \
+             patch('skills.commitment_manager.add', return_value=9) as add:
+            mon.check(state)
+        return state, add, llm.invoke.call_args_list[0][0][0]
+
+    def test_a_stated_deadline_becomes_a_soft_dated_item(self):
+        state, add, prompt = self._screen_dated(
+            "Please complete it by Tuesday, November 3.",
+            [{"id": "m1", "reason": "assessment to do", "needs_reply": False,
+              "deadline": {"date": "2026-11-03", "quote": "complete it by Tuesday, November 3",
+                           "what": "Complete the Acme assessment"}}])
+        self.assertIn("Today: Friday 2026-10-30", prompt)
+        kwargs = add.call_args.kwargs
+        self.assertEqual((kwargs["kind"], kwargs["due_date"], kwargs["source"]),
+                         ("deadline", "2026-11-03", "email"))
+        self.assertEqual(kwargs["description"], "Complete the Acme assessment")
+        self.assertEqual(state["pending_digest"][0]["tag"], "tracking as #9, due Tue Nov 3")
+
+    def test_a_deadline_the_email_does_not_state_tracks_nothing(self):
+        state, add, _ = self._screen_dated(
+            "The next step is a coding assessment.",
+            [{"id": "m1", "reason": "assessment to do", "needs_reply": False,
+              "deadline": {"date": "2026-11-03", "quote": "complete it by Tuesday",
+                           "what": "Complete the Acme assessment"}}])
+        add.assert_not_called()
+        self.assertNotIn("tracked", state["pending_digest"][0])
+
+    def test_a_reply_owed_carries_the_date_the_email_states(self):
+        service_verdict = [{"id": "m1", "reason": "wants an answer", "needs_reply": True,
+                            "deadline": {"date": "2026-11-03", "quote": "let us know by Tuesday",
+                                         "what": "Reply to Acme"}}]
+        state, add, _ = self._screen_dated("Please let us know by Tuesday.", service_verdict)
+        self.assertEqual((add.call_args.kwargs["kind"], add.call_args.kwargs["due_date"]),
+                         ("reply_owed", "2026-11-03"))
+        self.assertIn("due Tue Nov 3", state["pending_digest"][0]["tag"])
+
+    def test_a_deadline_he_already_tracks_is_not_tracked_again(self):
+        mine = {"id": 4, "description": "Finish the Acme coding assessment", "kind": "deadline",
+                "who": None, "due_date": "2026-11-03", "due_time": None, "recurring": None,
+                "status": "open", "source": "chat", "created_at": "2026-10-28 09:00:00",
+                "snoozed_until": None}
+        _, add, _ = self._screen_dated(
+            "Please complete it by Tuesday, November 3.",
+            [{"id": "m1", "reason": "assessment to do", "needs_reply": False,
+              "deadline": {"date": "2026-11-03", "quote": "complete it by Tuesday, November 3",
+                           "what": "Complete the Acme coding assessment"}}], open_items=[mine])
+        add.assert_not_called()
+
     def test_calendar_invites_and_payment_requests_are_never_replies_owed(self):
         """Every one of these in Aria's history was dropped by hand."""
         for subject, sender in [("Invitation: Sam / Jo @ Tue Nov 10, 2026 1pm", "Jo <jo@acme.com>"),

@@ -162,6 +162,71 @@ def _note(judge: str, text: str):
     decisions.note(judge, text)
 
 
+def _plain(text) -> str:
+    import html
+    return " ".join(html.unescape(str(text)).replace("’", "'").replace("‘", "'").lower().split())
+
+
+def stated_date(claim, text: str, now: datetime, horizon_days: int = 180):
+    """A date a judge says the mail states ('YYYY-MM-DD'), or None. She once presented
+    made-up due dates as real, so a date counts only when the judge quotes the words that
+    state it, those words are in the mail, and it falls between today and six months out."""
+    if not isinstance(claim, dict):
+        return None
+    quote = _plain(claim.get("quote", ""))
+    if len(quote) < 4 or quote not in _plain(text):
+        return None
+    try:
+        day = datetime.strptime(str(claim.get("date", ""))[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if not (now.date() <= day <= (now + timedelta(days=horizon_days)).date()):
+        return None
+    return day.isoformat()
+
+
+def _pretty_day(iso: str) -> str:
+    d = datetime.strptime(iso, "%Y-%m-%d")
+    return f"{d.strftime('%a %b')} {d.day}"
+
+
+def already_tracked(what: str, open_items: list, who: str = ""):
+    """The open commitment that is already about this, if any: two distinctive words
+    shared. Keeps the background side from tracking a second copy of what he told her."""
+    names = EmailDigestMonitor._words(who)    # a shared name alone isn't the same matter
+    words = EmailDigestMonitor._words(what) - names
+    for c in open_items:
+        if len(words & (EmailDigestMonitor._words(c['description']) - names)) >= 2:
+            return c
+    return None
+
+
+_QUOTE_HEADER = re.compile(r'^(-{2,}\s*(Original|Forwarded) Message|From: .+|Sent from my )', re.I)
+
+
+def own_words(text: str) -> str:
+    """His part of a message he sent. The thread quoted below it is someone else's words:
+    "I'll send you the contract" there is their promise, not his."""
+    lines, out = text.splitlines(), []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if _QUOTE_HEADER.match(stripped) or (
+                stripped.startswith("On ") and (stripped.endswith("wrote:") or nxt.endswith("wrote:"))):
+            break
+        if not stripped.startswith(">"):
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+def tracking_tag(entry: dict) -> str:
+    """How a digest line or alert says an item is tracked."""
+    if entry.get("tag"):
+        return entry["tag"]
+    tracked = entry.get("tracked", "")
+    return f"tracking reply as {tracked}" if tracked.startswith("#") else tracked.strip("()")
+
+
 def _llm_text(response) -> str:
     content = response.content
     if isinstance(content, list):
@@ -256,6 +321,17 @@ class CommitmentMonitor(Monitor):
         return out
 
 
+MAIL_TEXT_CHARS = 1500
+
+
+def _mail_text(payload) -> str:
+    try:
+        from skills.email_manager import _body_text
+        return _body_text(payload)[:MAIL_TEXT_CHARS]
+    except Exception:
+        return ""
+
+
 class EmailDigestMonitor(Monitor):
     """Screens new inbox mail: flagged items accumulate and go out as ONE evening digest
     (~18:00) — no instant pings unless one of his standing rules asks for it. Emails that
@@ -298,6 +374,15 @@ warrant a reply, so the user can judge.
 alert_now = TRUE only when one of his standing rules says to alert him immediately about
 this kind of email.
 
+deadline = the date by which the email says HE must answer or do something, only when the
+email itself states one ("let us know by Friday", "complete it before Nov 20", "the offer
+expires on the 20th", "payment due March 3"). Work a weekday or "tomorrow" out from today.
+Otherwise null: never estimate a date the email doesn't state. Not a deadline: a sale or
+promotion ending, a delivery estimate, the time of a meeting or event (that is his
+calendar's job), or anything already among his open commitments.
+
+Today: {today}
+
 {guide}
 
 His calendar, next 30 days:
@@ -314,7 +399,7 @@ Never cite "standing rules" or rule numbers, and never call something ignorable 
 of a rule that doesn't say so.
 
 Return ONLY a raw JSON array (no markdown), one object per flagged email:
-[{{"id": "<email id>", "reason": "<one short sentence; say if it may need a reply>", "needs_reply": true/false, "alert_now": true/false}}]
+[{{"id": "<email id>", "reason": "<one short sentence; say if it may need a reply>", "needs_reply": true/false, "alert_now": true/false, "deadline": null or {{"date": "YYYY-MM-DD", "quote": "<the words in the email that state it, copied exactly>", "what": "<what he must do by then, a few words, e.g. 'Complete the Acme assessment'>"}}}}]
 Return [] if nothing qualifies — that should be the common case."""
 
     DIGEST_HOUR = 18  # evening flush; the 08:00 briefing covers the morning side
@@ -373,15 +458,110 @@ Return [] if none — that should be the common case."""
     def check(self, state: dict) -> list:
         since = state.get("last_check_ts", time.time() - self.interval_seconds)
         inbound = self._screen_new_mail(state) or []
+        self._sent = []
         try:
             closed = self._close_proven(state, inbound, since)
         except Exception as e:  # never let the proof check block the digest
             print(f"[engine] email-digest: proof check failed: {e}")
             closed = []
+        try:
+            self._track_from_sent(state, self._sent)
+        except Exception as e:
+            print(f"[engine] email-digest: sent-mail check failed: {e}")
         alerts = [Notification(f"📩 {a['sender']} — “{a['subject']}”: {a['reason']}"
-                               + (f" (tracking reply as {a['tracked']})" if a.get("tracked") else ""))
+                               + (f" ({tracking_tag(a)})" if a.get("tracked") else ""))
                   for a in state.pop("alerts", [])]
         return alerts + closed + self._maybe_flush_digest(state)
+
+    SENT_PROMPT = """You read emails the user just SENT, to catch two things he would otherwise have
+to carry in his head. Most emails contain neither; return [] for those.
+
+1. A PROMISE: something he said he will do later. "I'll send the deck on Monday", "I'll get
+   back to you next week", "let me check with the bank and confirm".
+   Not a promise: what this email itself already does ("attached", "here it is"),
+   pleasantries ("talk soon", "let's catch up sometime", "looking forward to it"), agreeing
+   to a meeting time (that is his calendar's job), or anything already among his open
+   commitments.
+2. WAITING: something he has asked the other person for and now needs back: a question
+   that needs their answer, a document, a decision, a date.
+   Not waiting: a message that needs no answer (thanks, a confirmation, "see you then"),
+   or a reply that simply ends the exchange.
+
+Each email's "text" is only what HE wrote; never take a promise from anyone else's words.
+"due" is a date only if his words state one (work a weekday out from today); else null.
+
+Today: {today}
+
+His open commitments (never repeat one of these):
+{commitments}
+
+Emails he sent (JSON):
+{emails}
+
+Return ONLY a raw JSON array (no markdown), one object per promise or wait:
+[{{"email_id": "<email id>", "type": "promise" or "waiting", "what": "<promise: what he will do, as an instruction, e.g. 'Send Kim the deck'. waiting: what he is waiting for, e.g. 'answer on the start date'>", "who": "<the other person's name>", "due": "YYYY-MM-DD" or null, "quote": "<his words that say it, copied exactly>"}}]
+Return [] if none."""
+
+    def _track_from_sent(self, state: dict, sent: list):
+        """Track what he promised, and what he is now waiting on, in mail he just sent.
+        These are his words but not his request to track them, so they are soft (source
+        'sent'): announced in the evening digest, lapsing if nothing comes of them."""
+        from skills import commitment_manager
+        sent = [e for e in sent if (e.get('text') or '').strip()]
+        if not sent:
+            return
+        now = self.now_fn()
+        open_items = commitment_manager.get_open_commitments()
+        content = ask("sent-mail", today=now.strftime('%A %Y-%m-%d'),
+                      commitments="\n".join(commitment_manager.format_line(c)
+                                            for c in open_items) or "(none)",
+                      emails=json.dumps([{k: e[k] for k in ('id', 'to', 'subject', 'text')}
+                                         for e in sent], indent=2))
+        try:
+            found = _parse_llm_json(content)
+        except json.JSONDecodeError:
+            print(f"[engine] email-digest: unparseable sent-mail result: {content[:200]}")
+            return
+        by_id = {e['id']: e for e in sent}
+        per_email = {}
+        for item in found if isinstance(found, list) else []:
+            if not isinstance(item, dict):
+                continue
+            email, kind = by_id.get(item.get('email_id')), item.get('type')
+            what = " ".join(str(item.get('what') or '').split())[:120]
+            if not email or kind not in ('promise', 'waiting') or not what:
+                continue
+            quote = _plain(item.get('quote', ''))
+            if len(quote) < 4 or quote not in _plain(email['text']):
+                _note("sent-mail", f"ignored {kind} {what!r}: its quote isn't in what he wrote")
+                continue
+            if per_email.get(email['id'], 0) >= 2:
+                continue
+            who = (" ".join(str(item.get('who') or '').split())
+                   or email['to'].split('<')[0].strip(' "') or email['to'])[:60]
+            dupe = already_tracked(what, open_items, who=who)
+            if dupe:
+                _note("sent-mail", f"{kind} {what!r} not tracked: #{dupe['id']} already covers it")
+                continue
+            per_email[email['id']] = per_email.get(email['id'], 0) + 1
+            if kind == 'promise':
+                due = stated_date({"date": item.get('due'), "quote": item.get('quote')},
+                                  email['text'], now) if item.get('due') else None
+                cid = commitment_manager.add(description=what, kind='promise', who=who,
+                                             due_date=due, source='sent')
+                tag = f"tracking your promise as #{cid}" + (f", due {_pretty_day(due)}" if due else "")
+                reason = f"You told {who} you would: {what}."
+            else:
+                cid = commitment_manager.add(description=f"Waiting on {who}: {what}",
+                                             kind='waiting_on', who=who, source='sent')
+                tag = f"watching for their answer as #{cid}"
+                reason = f"You asked {who} for: {what}."
+            _note("sent-mail", f"tracking #{cid} ({kind}): {what!r} with {who}, from "
+                               f"{email['subject']!r}")
+            open_items = open_items + [{'id': cid, 'description': what}]
+            state.setdefault("pending_digest", []).append({
+                "sender": f"You → {who}", "subject": email['subject'], "reason": reason,
+                "tracked": f"#{cid}", "tag": tag, "at": now.strftime('%a %-I:%M %p')})
 
     def _new_sent_mail(self, state: dict, since: float) -> list:
         """Mail the user sent since the last tick ("I just completed the assessment" is
@@ -400,12 +580,11 @@ Return [] if none — that should be the common case."""
         for m in resp.get('messages', []):
             if m['id'] in seen:
                 continue
-            msg = service.users().messages().get(
-                userId='me', id=m['id'], format='metadata',
-                metadataHeaders=['Subject', 'To']).execute()
+            msg = service.users().messages().get(userId='me', id=m['id']).execute()
             headers = {h['name']: h['value'] for h in msg['payload'].get('headers', [])}
             sent.append({'id': m['id'], 'subject': headers.get('Subject', ''),
-                         'to': headers.get('To', ''), 'snippet': msg.get('snippet', '')})
+                         'to': headers.get('To', ''), 'snippet': msg.get('snippet', ''),
+                         'text': own_words(_mail_text(msg['payload']))})
         state["seen_sent_ids"] = (seen + [e['id'] for e in sent])[-300:]
         return sent
 
@@ -415,7 +594,7 @@ Return [] if none — that should be the common case."""
         the company's interview invite, and his own "I just completed it" all arrived while
         Aria kept nudging him about the assessment for two more days."""
         from skills import commitment_manager
-        sent = self._new_sent_mail(state, since)
+        sent = self._sent = self._new_sent_mail(state, since)
         emails = ([{'id': e['id'], 'direction': 'received', 'from': e['sender'],
                     'subject': e['subject'], 'snippet': e.get('snippet', '')} for e in inbound]
                   + [{'id': e['id'], 'direction': 'sent', 'to': e['to'],
@@ -492,6 +671,9 @@ Return [] if none — that should be the common case."""
                     'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject'),
                     'sender': next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown'),
                     'snippet': msg.get('snippet', ''),
+                    # The start of the body: a "let us know by Friday" is rarely in the
+                    # first 200 characters Gmail gives as the snippet.
+                    'text': _mail_text(msg['payload']),
                     'list_unsubscribe': next(
                         (h['value'] for h in headers if h['name'].lower() == 'list-unsubscribe'), ''),
                     'thread_id': msg.get('threadId'),
@@ -522,7 +704,8 @@ Return [] if none — that should be the common case."""
         # kept doing exactly what he'd told Aria not to.
         from instructions import render_for_prompt
         content = ask("email-screen", rules=render_for_prompt() or "(none)",
-                      emails=json.dumps(emails, indent=2), guide=situation.MAIL_GUIDE, **motion)
+                      emails=json.dumps(emails, indent=2), guide=situation.MAIL_GUIDE,
+                      today=self.now_fn().strftime('%A %Y-%m-%d'), **motion)
         try:
             flagged = _parse_llm_json(content)
         except json.JSONDecodeError:
@@ -544,6 +727,14 @@ Return [] if none — that should be the common case."""
             # (bank notices, booking confirmations, validation emails) no matter what the
             # screening LLM said. Still flagged in the digest — just never tracked.
             from email_filter import is_noreply_sender, is_never_a_reply
+            claim = item.get('deadline')
+            due = stated_date(claim, " ".join(str(email.get(k, ''))
+                                              for k in ('subject', 'snippet', 'text')),
+                              self.now_fn())
+            what = str(claim.get('what', '')).strip() if due else ''
+            if claim and not due:
+                _note("email-screen", f"ignored a deadline claimed for {email['subject']!r}: "
+                                      f"its quote isn't in the email, or the date is out of range")
             if item.get('needs_reply') and (is_noreply_sender(email['sender'])
                                             or is_never_a_reply(email['subject'])):
                 item['needs_reply'] = False
@@ -565,19 +756,38 @@ Return [] if none — that should be the common case."""
                     else:
                         create = False
                 if create:
-                    # NO fabricated due date. The sender set no deadline; inventing "+2 days"
-                    # made Aria present made-up dates as real ("I was making up due dates").
-                    # The chase loop nudges reply_owed by AGE, and the briefing shows open ones.
+                    # NO fabricated due date: inventing "+2 days" made Aria present made-up
+                    # dates as real. A date is set only when the email states one and the
+                    # screener quoted it (stated_date); otherwise the chase loop goes by age.
                     cid = commitment_manager.add(
                         description=f"Reply to {sender_name}: {email['subject']}",
-                        kind='reply_owed', who=sender_name, source='email')
+                        kind='reply_owed', who=sender_name, due_date=due, source='email')
                     entry["tracked"] = f"#{cid}"
+                    if due:
+                        entry["tag"] = f"tracking reply as #{cid}, due {_pretty_day(due)}"
                     _note("email-screen", f"tracking #{cid}: reply to {sender_name} on "
                                           f"{email['subject']!r}")
                 else:
                     entry["tracked"] = "(you already owe a reply on this thread)"
                     _note("email-screen", f"no new item for {email['subject']!r}: already "
                                           f"tracking a reply on this thread (#{existing['id']})")
+                converted.append(email['id'])
+            elif due and what and email['id'] not in converted:
+                # Not a reply, but the email gives him something to do by a date: track it,
+                # softly (source 'email'), unless he is already tracking it himself.
+                sender_name = email['sender'].split('<')[0].strip(' "') or email['sender']
+                dupe = already_tracked(what, commitment_manager.get_open_commitments(),
+                                       who=sender_name)
+                if dupe:
+                    _note("email-screen", f"deadline in {email['subject']!r} ({what}, {due}) "
+                                          f"not tracked: #{dupe['id']} already covers it")
+                else:
+                    cid = commitment_manager.add(description=what[:120], kind='deadline',
+                                                 who=sender_name, due_date=due, source='email')
+                    entry["tracked"] = f"#{cid}"
+                    entry["tag"] = f"tracking as #{cid}, due {_pretty_day(due)}"
+                    _note("email-screen", f"tracking #{cid}: {what!r} due {due}, stated in "
+                                          f"{email['subject']!r}")
                 converted.append(email['id'])
             # A standing rule can ask for an immediate ping ("alert me right away about
             # interview invites") — that one goes out this tick instead of in the digest.
@@ -597,21 +807,21 @@ Return [] if none — that should be the common case."""
             return []
         state["pending_digest"] = []
         items = self._as_of_now(items)
-        tracked = sum(1 for it in items if it.get("tracked"))
+        tracked = sum(1 for it in items if it.get("tracked", "").startswith("#"))
         body = self._write_digest(items)
         if body is None:                     # no editor: one plain line per email
             lines = []
             for it in items:
                 line = f"• {it['sender']} — “{it['subject']}”: {it['reason']}"
                 if it.get("tracked"):
-                    line += f" (tracking reply as {it['tracked']})"
+                    line += f" ({tracking_tag(it)})"
                 elif it.get("since"):
                     line += f" ({it['since']})"
                 lines.append(line)
             body = "\n".join(lines)
         if not body.strip():
             return []
-        footer = (f"\n\nI'm tracking {tracked} reply(ies) you owe — "
+        footer = (f"\n\nI'm tracking {tracked} of these for you — "
                   "they'll be in tomorrow's briefing too.") if tracked else ""
         return [Notification("📬 Evening inbox digest:\n" + body + footer)]
 
@@ -644,6 +854,7 @@ Return [] if none — that should be the common case."""
                 it["since"] = it.get("since") or "since handled, no longer tracked"
             if it.get("since"):
                 it.pop("tracked", None)
+                it.pop("tag", None)
             out.append(it)
         return out
 
@@ -656,8 +867,9 @@ knowing what came after, so write the digest as things stand NOW:
   item was closed): say it is done in a few words, or leave the matter out if nothing
   about it is worth his attention any more. Never tell him to reply to something he has
   answered, and never ask for a reply about something already on his calendar.
-- Only a note with "tracked" is a reply you are tracking; end that bullet with
-  "(tracking reply as <its tracked value>)". Never write that for any other note.
+- Only a note with "tracked" is something you are tracking for him; end that bullet with
+  the note's "tracked" text in parentheses, copied exactly, e.g. "(tracking reply as #12)".
+  Never write that for any other note.
 - Put what needs him first. Keep every matter that still needs him or that he'd want to
   know happened; never invent a detail that isn't in the notes, calendar or commitments.
 
@@ -680,8 +892,11 @@ Return ONLY raw JSON (no markdown): {{"bullets": ["<sender or company: what it i
         try:
             import situation
             from instructions import render_for_prompt
-            notes = [{k: it[k] for k in ("at", "sender", "subject", "reason", "tracked", "since")
+            notes = [{k: it[k] for k in ("at", "sender", "subject", "reason", "since")
                       if it.get(k)} for it in items]
+            for note, it in zip(notes, items):
+                if it.get("tracked"):
+                    note["tracked"] = tracking_tag(it)
             verdict = _parse_llm_json(ask(
                 "digest", rules=render_for_prompt() or "(none)",
                 notes=json.dumps(notes, indent=2), **situation.in_motion()))
@@ -834,8 +1049,11 @@ A commitment is DONE only when the evidence shows THAT commitment complete:
   the exchange concluded, nothing is left to answer);
 - a "schedule / book / set up X" item: the event is on his calendar, or a confirmation of
   the booking arrived;
-- any item: he says he did it in a sent email, a confirmation of it arrived, or the next
-  stage happened that can't happen until it's done.
+- a "waiting on X" item (kind waiting_on) is X's move, not his: it is done when X has
+  written back on that matter since it was tracked (cite the message RECEIVED from X).
+  His own follow-up does not settle it;
+- any other item: he says he did it in a sent email, a confirmation of it arrived, or the
+  next stage happened that can't happen until it's done.
 A reply owed to one person is not settled by something arranged with someone else at the
 same company: a recruiter's follow-up still wants an answer after the coordinator has
 booked the interview.
@@ -866,6 +1084,29 @@ def _fits_only(commitment: dict, proof: dict, open_items: dict) -> bool:
     return mine >= 2 and all(mine > n for cid, n in score.items() if cid != commitment['id'])
 
 
+SOFT_LAPSE_DAYS = {'reply_owed': REPLY_LAPSES_DAYS, 'deadline': 7, 'promise': 14,
+                   'waiting_on': 14}
+
+
+def lapse_days(c: dict) -> int:
+    return SOFT_LAPSE_DAYS.get(c['kind'], 14)
+
+
+def _has_lapsed(c: dict, now: datetime) -> bool:
+    """A soft item (one she read off his mail, not one he asked for) with nothing on it for
+    its allowance: counted from when it was tracked, or from its date if that is later."""
+    from skills.commitment_manager import is_soft
+    if not is_soft(c) or c['kind'] not in SOFT_LAPSE_DAYS:
+        return False
+    try:
+        start = datetime.fromisoformat((c.get('created_at') or '')[:19])
+        if c.get('due_date'):
+            start = max(start, datetime.fromisoformat(c['due_date']))
+    except ValueError:
+        return False
+    return now - start > timedelta(days=lapse_days(c))
+
+
 def reconcile(now: datetime = None) -> list:
     """Close open commitments his mail or calendar show are already handled, and say so.
     Returns the notifications. The model proposes; code checks every close: the evidence
@@ -890,23 +1131,21 @@ def reconcile(now: datetime = None) -> list:
                     f"✅ Stopped tracking: {c['description'][:90]} — a calendar invitation or "
                     f"payment request isn't answered by email. If that's wrong, say so and "
                     f"I'll reopen it."))
-    # Replies the screener guessed at are soft: if he hasn't answered in a week he isn't
-    # going to, and carrying them forever is the nagging he asked not to get. Ones he
-    # asked to track himself, and everything that isn't a reply, never lapse.
+    # What she picked up from his mail on her own is soft: if nothing has happened in a
+    # week or two it isn't going to, and carrying it forever is the nagging he asked not
+    # to get. Anything he asked her to track never lapses.
     lapsed = []
     for c in list(items):
-        created = (c.get('created_at') or '')[:19]
-        if (c['kind'] == 'reply_owed' and c.get('source') == 'email' and created
-                and now - datetime.fromisoformat(created) > timedelta(days=REPLY_LAPSES_DAYS)):
+        if _has_lapsed(c, now):
             items.remove(c)
             if commitment_manager.drop(c['id']):
                 lapsed.append(c['description'].removeprefix("Reply to ")[:70])
-                _note("reconcile", f"let go of #{c['id']} ({c['description']!r}): a reply the "
-                                   f"screener tracked, unanswered for over {REPLY_LAPSES_DAYS} days")
+                _note("reconcile", f"let go of #{c['id']} ({c['description']!r}): picked up "
+                                   f"from his mail, nothing on it for over {lapse_days(c)} days")
     if lapsed:
         early.append(Notification(
-            f"🧹 Let go of {len(lapsed)} email repl{'y' if len(lapsed) == 1 else 'ies'} "
-            f"unanswered for over {REPLY_LAPSES_DAYS} days: " + "; ".join(lapsed)
+            f"🧹 Let go of {len(lapsed)} thing{'' if len(lapsed) == 1 else 's'} I'd picked up "
+            f"from your mail that went quiet: " + "; ".join(lapsed)
             + ". Tell me if one still matters and I'll bring it back."))
     if not items:
         return early
@@ -953,9 +1192,14 @@ def reconcile(now: datetime = None) -> list:
             proof = next((m for m in sit["mail"].get(cid, [])
                           if quote in m['subject'].lower() or m['subject'].lower() in quote), None)
             created = (c.get('created_at') or '')[:19]
+            newer = bool(proof and created
+                         and proof['ts'] > datetime.fromisoformat(created).timestamp())
             if proof and c['kind'] == 'reply_owed' and not (
-                    proof['direction'] == 'sent' and created
-                    and proof['ts'] > datetime.fromisoformat(created).timestamp()):
+                    proof['direction'] == 'sent' and newer):
+                proof = None
+            # Something he is waiting on closes only on what THEY sent, after he began waiting.
+            if proof and c['kind'] == 'waiting_on' and not (
+                    proof['direction'] == 'received' and newer):
                 proof = None
             source = ("your email" if proof and proof['direction'] == 'sent'
                       else (proof or {}).get('who', '').split('<')[0].strip(' "'))
@@ -972,6 +1216,14 @@ def reconcile(now: datetime = None) -> list:
             continue
         _note("reconcile", f"closed #{cid} ({c['description']!r}) on {source}: "
                            f"{proof.get('shown') or proof['subject']!r}")
+        if c['kind'] == 'waiting_on':
+            notes.append(Notification(
+                f"📬 {source or c.get('who') or 'They'} got back to you: "
+                f"“{proof.get('shown') or proof['subject']}” — "
+                f"{str(item.get('evidence', '')).strip()}. No longer waiting on: "
+                f"{c['description'].removeprefix('Waiting on ')}. If that isn't the answer, "
+                f"say so and I'll keep watching."))
+            continue
         notes.append(Notification(
             f"✅ Marked done: {c['description']} — {str(item.get('evidence', '')).strip()} "
             f"({source}: “{proof.get('shown') or proof['subject']}”). If that's wrong, say so and "
@@ -1004,6 +1256,10 @@ who has his back would text: lead with the one thing that matters most and why n
 offer one concrete thing you can do about it (block time on his calendar, draft the reply,
 pick a real date). Mention at most two other items, briefly. No stock greeting, no "on my
 radar", nothing that reads like a status report — and zero nagging tone.
+
+An item of kind "waiting_on" is someone else's move, never his: do not nudge him to do it.
+If four or more days have passed (or its date has) and the mail below shows nothing back
+from them, you may offer once to draft a follow-up to that person.
 
 A commitment is one moving part of a task; his mail and calendar below hold the others.
 Read them together before deciding. If they show an item is handled or already moving (he
@@ -1517,6 +1773,7 @@ class NetflixMonitor(Monitor):
 JUDGES = {
     "email-screen": (EmailDigestMonitor.SCREEN_PROMPT, "light"),
     "email-proof": (EmailDigestMonitor.PROOF_PROMPT, "light"),
+    "sent-mail": (EmailDigestMonitor.SENT_PROMPT, "light"),
     "digest": (EmailDigestMonitor.DIGEST_PROMPT, "light"),
     "moment": (MomentMonitor.PROMPT, "light"),
     "reconcile": (RECONCILE_PROMPT, "standard"),
