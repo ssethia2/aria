@@ -58,6 +58,8 @@ Incoming mail gets the same treatment in both places that judge it, the engine's
 
 `situation.know(about)` is the general form, exposed to the chat brain as the `look_up` tool: one call returns everything on a person, company, trip or topic from memory and earlier chats, mail both ways (90 days), the calendar (a month back, two ahead), commitments (open and recently closed) and the people notes. Mail and calendar are read live, never copied into memory: a copy goes stale, and memory holds only what exists nowhere else. This lookup is the base the background judges are meant to move onto, one monitor at a time.
 
+**Background judges and the decision record (`engine.ask`, `decisions.py`).** Each background judgment is one question to a model: the email screener, the proof and reconcile checks, the chase loop, the digest editor, heads-ups, insights, reflections. All of them ask through `engine.ask(judge, **fields)`, which takes the prompt and tier from the `JUDGES` table and keeps what the judge was shown and what it said in `decisions.jsonl` for 14 days, with a note for what the code then did (the close it made, the one it refused). Three things read that record: the chat brain's `explain_decision` tool, so "why did you close that?" is answered from what happened and not a guess; `python3 decisions.py --about <subject>` for debugging; and `python3 -m evals --replay <judge>`, which re-asks a judge its recent real questions before a prompt or model change ships. The same table drives the judge scenarios in the eval suite.
+
 Everything Aria says on her own judgment passes one gate ([ADR 0009](adr/0009-moments-and-one-gate.md)): judgment pings ("nudges" — chase, insight, moments) share a daily budget, and every judge reads the same standing rules and the same 48-hour log of what she has already told him, so a rule binds every monitor and none repeats another. Reports (reminders he set, digests, results of actions) always go through. Engine messages reach the live conversation too, so he can answer an offer with "yes".
 
 | Monitor | What it does |
@@ -101,6 +103,7 @@ people.py                People model
 instructions.py          Standing-instructions registry
 engine.py                Proactivity engine + all monitors
 situation.py             Mail and calendar around each open commitment (the task's other moving parts)
+decisions.py             What each background judge was shown and said (14 days, local); explain / replay
 moments.py               Anticipation layer: calendar moments, touchpoints, pre-heads-up legwork
 healthcheck.py           Self-diagnosis (doctor / tool / startup / monitor)
 heartbeat.py             External dead-man's-switch ping

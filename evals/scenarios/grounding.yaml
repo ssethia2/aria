@@ -118,3 +118,31 @@
           Gives the CURRENT state: an interview with Northwind is confirmed and on his
           calendar (names the day or 2 PM), and mentions the portfolio sample they asked
           for. Does NOT say he is still waiting to hear back.
+
+- id: explains-a-background-decision-from-the-record
+  why: "Asked why she had closed or dropped something on her own, she guessed at causes. The record of what her background side saw and decided answers it."
+  tools:
+    explain_decision: |
+      Background decisions mentioning this, newest first:
+
+      {{day:today-1}}, 4:05 PM · reconcile
+        did: closed #31 ('Reply to Kim Lee: Porto dates') on your email: 'Re: Porto dates'
+
+      {{day:today-1}}, 4:05 PM · reconcile
+        saw situation: {{day:today-1}}, HE SENT to Kim Lee: “Re: Porto dates” — The 14th to the 18th works for me.
+        said: [{"commitment_id": 31, "source": "mail", "quote": "Re: Porto dates", "evidence": "you replied to Kim with your dates"}]
+  turns:
+    - user: "Why did you close the reply to Kim about Porto?"
+      expect:
+        called: [explain_decision]
+        not_called: [reopen_commitment]
+        judge: "She says she closed it because he had already replied to Kim (his sent email about the Porto dates). She gives no other guessed cause, and the answer is short: a few sentences at most."
+
+- id: no-record-means-no-guessed-cause
+  why: "With nothing to go on she used to offer a plausible-sounding reason for her own behavior. No record means saying so."
+  turns:
+    - user: "Why didn't you tell me about the email from Northwind yesterday?"
+      expect:
+        called: [explain_decision]
+        judge: "She does not state a cause as fact that the tool results don't show. She says she can't see why (or has no record of deciding on it), and may offer to look at the email now."
+

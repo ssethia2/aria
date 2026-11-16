@@ -109,6 +109,7 @@ def _redirect():
     targets = {
         "agent_core": {"CHECKPOINT_DB_PATH": "aria_checkpoints.db"},
         "cost_tracker": {"LOG_PATH": "cost_log.json"},
+        "decisions": {"LOG_PATH": "decisions.jsonl"},
         "engine": {"STATE_PATH": "engine_state.json"},
         "memory": {"SCRATCHPAD_PATH": "daily_scratchpad.txt",
                    "CONVERSATION_PATH": "daily_conversation.jsonl"},

@@ -132,6 +132,36 @@ def judgment_context(state: dict = None):
     return rules, told or "(nothing in the last two days)"
 
 
+def ask(judge: str, llm=None, record: bool = True, **fields) -> str:
+    """Put one question to a background judge and return its answer as text.
+
+    Every judge asks through here. The prompt and tier come from JUDGES, so the evals put
+    the same question to the same prompt, and each real decision is kept in the decision
+    record (decisions.py): what the judge was shown, and what it said.
+    """
+    template, tier = JUDGES[judge]
+    if llm is None:
+        if tier == "light":
+            llm = _get_llm()
+        else:
+            from llm_router import get_llm
+            llm = get_llm(temperature=0, tier=tier)
+    from llm_router import reply_text
+    text = reply_text(llm.invoke(template.format(**fields)))
+    if not isinstance(text, str):
+        text = str(text)
+    if record:
+        import decisions
+        decisions.record(judge, fields, text)
+    return text
+
+
+def _note(judge: str, text: str):
+    """What the code did with a verdict, kept beside it in the decision record."""
+    import decisions
+    decisions.note(judge, text)
+
+
 def _llm_text(response) -> str:
     content = response.content
     if isinstance(content, list):
@@ -400,12 +430,7 @@ Return [] if none — that should be the common case."""
         listing = "\n".join(f"#{c['id']} {c['description']}"
                             + (f" (due {c['due_date']})" if c.get('due_date') else "")
                             for c in open_items.values())
-        response = _get_llm().invoke(self.PROOF_PROMPT.format(
-            commitments=listing, emails=json.dumps(emails, indent=2)))
-        content = response.content
-        if isinstance(content, list):
-            content = next((b['text'] for b in content
-                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        content = ask("email-proof", commitments=listing, emails=json.dumps(emails, indent=2))
         try:
             proven = _parse_llm_json(content)
         except json.JSONDecodeError:
@@ -425,12 +450,14 @@ Return [] if none — that should be the common case."""
             if not c or not email:
                 continue
             if not self._email_names_it(c, email, offered):
-                print(f"[engine] email-digest: rejected proof for #{cid} "
-                      f"({c['description']!r}) — email {email['subject']!r} doesn't name it")
+                _note("email-proof", f"rejected proof for #{cid} ({c['description']!r}): "
+                                     f"email {email['subject']!r} doesn't name it")
                 continue
             del open_items[cid]             # one close per commitment
             if commitment_manager.complete(cid) is None:
                 continue
+            _note("email-proof", f"closed #{cid} ({c['description']!r}) on "
+                                 f"{email['direction']} mail {email['subject']!r}")
             source = ("your email" if email['direction'] == 'sent'
                       else email['from'].split('<')[0].strip(' "') or email['from'])
             notes.append(Notification(
@@ -494,13 +521,8 @@ Return [] if none — that should be the common case."""
         # away about interview invites") used to reach only the chat agent, so the screener
         # kept doing exactly what he'd told Aria not to.
         from instructions import render_for_prompt
-        response = _get_llm().invoke(self.SCREEN_PROMPT.format(
-            rules=render_for_prompt() or "(none)", emails=json.dumps(emails, indent=2),
-            guide=situation.MAIL_GUIDE, **motion))
-        content = response.content
-        if isinstance(content, list):
-            content = next((b['text'] for b in content
-                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        content = ask("email-screen", rules=render_for_prompt() or "(none)",
+                      emails=json.dumps(emails, indent=2), guide=situation.MAIL_GUIDE, **motion)
         try:
             flagged = _parse_llm_json(content)
         except json.JSONDecodeError:
@@ -525,6 +547,8 @@ Return [] if none — that should be the common case."""
             if item.get('needs_reply') and (is_noreply_sender(email['sender'])
                                             or is_never_a_reply(email['subject'])):
                 item['needs_reply'] = False
+                _note("email-screen", f"not tracking a reply to {email['subject']!r}: an "
+                                      f"automated sender or a kind of mail never answered by email")
             if item.get('needs_reply') and email['id'] not in converted:
                 sender_name = email['sender'].split('<')[0].strip(' "') or email['sender']
                 # A thread RE-OWES a reply each time they write back. So: if there's an
@@ -548,8 +572,12 @@ Return [] if none — that should be the common case."""
                         description=f"Reply to {sender_name}: {email['subject']}",
                         kind='reply_owed', who=sender_name, source='email')
                     entry["tracked"] = f"#{cid}"
+                    _note("email-screen", f"tracking #{cid}: reply to {sender_name} on "
+                                          f"{email['subject']!r}")
                 else:
                     entry["tracked"] = "(you already owe a reply on this thread)"
+                    _note("email-screen", f"no new item for {email['subject']!r}: already "
+                                          f"tracking a reply on this thread (#{existing['id']})")
                 converted.append(email['id'])
             # A standing rule can ask for an immediate ping ("alert me right away about
             # interview invites") — that one goes out this tick instead of in the digest.
@@ -654,14 +682,15 @@ Return ONLY raw JSON (no markdown): {{"bullets": ["<sender or company: what it i
             from instructions import render_for_prompt
             notes = [{k: it[k] for k in ("at", "sender", "subject", "reason", "tracked", "since")
                       if it.get(k)} for it in items]
-            from llm_router import reply_text
-            verdict = _parse_llm_json(reply_text(_get_llm().invoke(self.DIGEST_PROMPT.format(
-                rules=render_for_prompt() or "(none)", notes=json.dumps(notes, indent=2),
-                **situation.in_motion()))))
+            verdict = _parse_llm_json(ask(
+                "digest", rules=render_for_prompt() or "(none)",
+                notes=json.dumps(notes, indent=2), **situation.in_motion()))
             bullets = [str(b).strip() for b in verdict.get("bullets", []) if str(b).strip()]
             # Every reply still being tracked must be named; otherwise don't trust it.
             for it in items:
                 if it.get("tracked") and not any(it["tracked"] in b for b in bullets):
+                    _note("digest", f"editor left out tracked reply {it['tracked']}; sent "
+                                    f"the plain one-line-per-email digest instead")
                     return None
             return "\n".join(f"• {b}" for b in bullets)
         except Exception as e:
@@ -773,17 +802,17 @@ you found that he doesn't already have.
             sections.append("Open commitments involving them:\n" + "\n".join(found["commitments"]))
         if found["people"]:
             sections.append("What you know about them:\n" + "\n".join(found["people"]))
-        prompt = self.PROMPT.format(
-            guidance=self.GUIDANCE[(m.kind, tp.name)], rules=rules, told=told,
+        verdict = _parse_llm_json(ask(
+            "moment", guidance=self.GUIDANCE[(m.kind, tp.name)], rules=rules, told=told,
             now=now.strftime('%a %-d %b, %-I:%M %p'), touchpoint=tp.name,
-            event=moments.describe(m, now), found="\n\n".join(sections))
-        verdict = _parse_llm_json(_llm_text(_get_llm().invoke(prompt)))
+            event=moments.describe(m, now), found="\n\n".join(sections)))
         message = (verdict.get("message") or "").strip()
         if not verdict.get("send") or not message:
             return None
         bad = moments.unknown_call_links(message, m, found)
         if bad:
-            print(f"[engine] moments: dropped {m.title!r} heads-up — unknown join link {bad}")
+            _note("moment", f"dropped the {m.title!r} heads-up: it gave a join link "
+                            f"({bad}) that isn't on the event or in the mail")
             return None
         return Notification(f"{self.ICON[m.kind]} {message}", kind="nudge")
 
@@ -872,6 +901,8 @@ def reconcile(now: datetime = None) -> list:
             items.remove(c)
             if commitment_manager.drop(c['id']):
                 lapsed.append(c['description'].removeprefix("Reply to ")[:70])
+                _note("reconcile", f"let go of #{c['id']} ({c['description']!r}): a reply the "
+                                   f"screener tracked, unanswered for over {REPLY_LAPSES_DAYS} days")
     if lapsed:
         early.append(Notification(
             f"🧹 Let go of {len(lapsed)} email repl{'y' if len(lapsed) == 1 else 'ies'} "
@@ -886,11 +917,11 @@ def reconcile(now: datetime = None) -> list:
     listing = "\n".join(f"#{c['id']} [{c['kind']}] {c['description']}"
                         + (f" (due {c['due_date']})" if c.get('due_date') else "")
                         + f" (tracked since {(c.get('created_at') or '?')[:16]})" for c in items)
-    from llm_router import get_llm, reply_text
+    from llm_router import get_llm
     try:
-        proven = _parse_llm_json(reply_text(get_llm(tier="standard").invoke(
-            RECONCILE_PROMPT.format(today=now.strftime('%A %Y-%m-%d'), commitments=listing,
-                                    situation=shown))))
+        proven = _parse_llm_json(ask(
+            "reconcile", llm=get_llm(tier="standard"), today=now.strftime('%A %Y-%m-%d'),
+            commitments=listing, situation=shown))
     except Exception as e:
         print(f"[engine] reconcile: no verdict ({e})")
         return early
@@ -932,11 +963,15 @@ def reconcile(now: datetime = None) -> list:
                                'from': proof['who']}
         if not proof or not (EmailDigestMonitor._email_names_it(c, proof, by_id)
                              or _fits_only(c, proof, by_id)):
-            print(f"[engine] reconcile: rejected close of #{cid} ({c['description']!r})")
+            _note("reconcile", f"rejected close of #{cid} ({c['description']!r}): the "
+                               f"{item.get('source') or 'mail'} quoted ({quote[:80]!r}) isn't "
+                               f"proof this item can close on")
             continue
         del by_id[cid]
         if commitment_manager.complete(cid) is None:
             continue
+        _note("reconcile", f"closed #{cid} ({c['description']!r}) on {source}: "
+                           f"{proof.get('shown') or proof['subject']!r}")
         notes.append(Notification(
             f"✅ Marked done: {c['description']} — {str(item.get('evidence', '')).strip()} "
             f"({source}: “{proof.get('shown') or proof['subject']}”). If that's wrong, say so and "
@@ -1035,15 +1070,10 @@ Return ONLY raw JSON (no markdown):
 
         rules, told = judgment_context()
         import situation
-        response = _get_llm().invoke(
-            self.PROMPT.format(today=today, commitments=json.dumps(open_, indent=2),
-                               rules=rules, told=told,
-                               situation=situation.describe(open_) or
-                               "(nothing in his mail or calendar about these)"))
-        content = response.content
-        if isinstance(content, list):
-            content = next((b['text'] for b in content
-                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
+        content = ask("chase", today=today, commitments=json.dumps(open_, indent=2),
+                      rules=rules, told=told,
+                      situation=situation.describe(open_) or
+                      "(nothing in his mail or calendar about these)")
         try:
             verdict = _parse_llm_json(content)
         except json.JSONDecodeError:
@@ -1206,18 +1236,13 @@ Return ONLY JSON (no markdown):
         recent = state.get("recent", [])
         rules, told = judgment_context()
         from llm_router import get_llm
-        prompt = self.PROMPT.format(
-            recent="\n".join(f"- {r}" for r in recent) + "\n" + told, rules=rules,
-            when=now.strftime('%A %-I%p'), context=context)
         try:
-            resp = get_llm(temperature=0, tier="light").invoke(prompt)
+            content = ask("insight", llm=get_llm(temperature=0, tier="light"),
+                          recent="\n".join(f"- {r}" for r in recent) + "\n" + told,
+                          rules=rules, when=now.strftime('%A %-I%p'), context=context)
         except Exception as e:
             print(f"[insight] llm failed: {e}")
             return []  # don't burn the slot on a transient failure
-        content = resp.content
-        if isinstance(content, list):
-            content = next((b['text'] for b in content
-                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
         try:
             verdict = _parse_llm_json(content)
         except Exception:
@@ -1288,16 +1313,12 @@ Return ONLY JSON (no markdown):
             existing = "(none)"
 
         from llm_router import get_llm
-        prompt = self.PROMPT.format(existing=existing, context=context)
         try:
-            resp = get_llm(temperature=0, tier="light").invoke(prompt)
+            content = ask("reflection", llm=get_llm(temperature=0, tier="light"),
+                          existing=existing, context=context)
         except Exception as e:
             print(f"[reflection] llm failed: {e}")
             return []   # don't burn the day on a transient failure
-        content = resp.content
-        if isinstance(content, list):
-            content = next((b['text'] for b in content
-                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
         try:
             verdict = _parse_llm_json(content)
         except Exception:
@@ -1397,15 +1418,11 @@ Return ONLY JSON (no markdown):
 
         from llm_router import get_llm
         try:
-            resp = get_llm(temperature=0, tier="light").invoke(
-                self.PROMPT.format(existing=existing, context=context))
+            content = ask("weekly-reflection", llm=get_llm(temperature=0, tier="light"),
+                          existing=existing, context=context)
         except Exception as e:
             print(f"[weekly] llm failed: {e}")
             return []
-        content = resp.content
-        if isinstance(content, list):
-            content = next((b['text'] for b in content
-                            if isinstance(b, dict) and b.get('type') == 'text'), str(content))
         try:
             verdict = _parse_llm_json(content)
         except Exception:
@@ -1490,6 +1507,21 @@ class NetflixMonitor(Monitor):
             return []
         return [Notification(
             f"📺 A Netflix household-update email arrived but I couldn't finish it:\n{result}")]
+
+
+# Every background judge: its prompt and the tier it runs on. `ask` reads this, and so do
+# the judge evals (evals/scenarios/judges.yaml) and `python3 -m evals --replay`.
+JUDGES = {
+    "email-screen": (EmailDigestMonitor.SCREEN_PROMPT, "light"),
+    "email-proof": (EmailDigestMonitor.PROOF_PROMPT, "light"),
+    "digest": (EmailDigestMonitor.DIGEST_PROMPT, "light"),
+    "moment": (MomentMonitor.PROMPT, "light"),
+    "reconcile": (RECONCILE_PROMPT, "standard"),
+    "chase": (ChaseMonitor.PROMPT, "light"),
+    "insight": (InsightMonitor.PROMPT, "light"),
+    "reflection": (ReflectionMonitor.PROMPT, "light"),
+    "weekly-reflection": (WeeklyReflectionMonitor.PROMPT, "light"),
+}
 
 
 class ProactiveEngine:

@@ -28,10 +28,38 @@ class TestScenarioFiles(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.scenarios = H.load_scenarios()
+        cls.everything = H.load_scenarios()
+        cls.scenarios = [s for s in cls.everything if "judge" not in s]     # chat
+        cls.judges = [s for s in cls.everything if "judge" in s]            # background
+
+    def test_every_judge_scenario_is_well_formed(self):
+        import engine
+        self.assertGreaterEqual(len(self.judges), 15)
+        for s in self.judges:
+            self.assertTrue(s.get("why"), f"{s['id']}: say WHY the scenario exists")
+            self.assertIn(s["judge"], engine.JUDGES, f"{s['id']}: no such judge")
+            self.assertNotIn("turns", s, f"{s['id']}: a judge scenario has fields, not turns")
+            unknown = set(s.get("fields") or {}) - H.judge_field_names(s["judge"]) - {"moment"}
+            self.assertFalse(unknown, f"{s['id']}: {s['judge']}'s prompt has no fields {unknown}")
+            expect = s.get("expect") or {}
+            self.assertTrue(expect, f"{s['id']}: expects nothing")
+            self.assertFalse(set(expect) - H.JUDGE_EXPECT, f"{s['id']}: unknown expectation keys")
+            r = H.resolve(s, TODAY)
+            self.assertNotIn("{{", repr(r), f"{s['id']}: unresolved template")
+            for pat in (r["expect"].get("text_matches") or []) + (r["expect"].get("text_not_matches") or []):
+                re.compile(pat)
+            for item in r["expect"].get("items") or []:
+                self.assertIn("where", item, f"{s['id']}: an item check needs 'where'")
+            H.judge_fields(s["judge"], r.get("fields") or {}, TODAY)      # every field fills
+
+    def test_every_judge_has_a_scenario(self):
+        import engine
+        covered = {s["judge"] for s in self.judges}
+        # The two reflection judges propose standing rules, which he approves by hand.
+        self.assertFalse(set(engine.JUDGES) - covered - {"reflection", "weekly-reflection"})
 
     def test_there_are_scenarios_and_ids_are_unique(self):
-        ids = [s["id"] for s in self.scenarios]
+        ids = [s["id"] for s in self.everything]
         self.assertGreaterEqual(len(ids), 15)
         self.assertEqual(len(ids), len(set(ids)), "duplicate scenario ids")
 

@@ -19,6 +19,8 @@ python3 -m evals --trials 3         # flakiness: pass rate per scenario
 python3 -m evals --brain api        # exercise the API brain instead (bills the API)
 python3 -m evals --live-context     # use copies of YOUR real profile/rules/people
 python3 -m evals --list
+python3 -m evals --only judges      # the background judges only (cents, about a minute)
+python3 -m evals --replay reconcile # re-ask a judge its recent REAL questions (see below)
 ```
 
 Each run prints pass/fail per scenario (with the reason and her reply on failure),
@@ -97,3 +99,49 @@ exactly as the Telegram bot does.
 Prefer deterministic checks. Use `judge` only for what can't be checked mechanically, and
 write the rubric so a reply that meets its *intent* passes. `tests/test_evals.py` checks
 that every scenario parses, references real tools and args, and resolves its templates.
+
+## Background judges
+
+The chat agent is half of Aria. The other half is a set of single questions her engine
+puts to a model on its own: is this email worth flagging, does it prove a commitment done,
+is this commitment already handled, is a nudge worth sending, what goes in tonight's
+digest. Those judges caused most real misbehavior and had no behavior tests, because a
+chat scenario never reaches them.
+
+A scenario with `judge:` (in `evals/scenarios/judges.yaml`) gives one judge exactly what
+it would be shown and checks the verdict. It runs through `engine.ask`, so the prompt and
+model tier are production's (`engine.JUDGES`). Nothing is fetched and nothing is recorded.
+
+```yaml
+- id: reconcile-the-event-he-must-prepare-for-closes-nothing
+  judge: reconcile
+  why: "An event on the calendar is not proof he has prepared for it."
+  fields:                         # the prompt's fields; the rest get a neutral default
+    commitments: "#9 [promise] Prepare the walkthrough for the Acme interview (tracked since {{today-4}} 10:00)"
+    situation: |
+      On his calendar, past 21 days to next 30 days:
+        {{day:today+3}}, 2:00 PM — Acme: technical interview
+  expect:
+    count: 0
+```
+
+A field given as a list or mapping is shown to the judge as JSON, the way the engine shows
+it. `{{day:today-2}}` renders `Sat Nov 14`, the date format of mail and calendar lines.
+For the heads-up judge, `moment: [meeting, before]` picks the guidance for that touchpoint.
+
+| Key | Checks |
+|---|---|
+| `count` | length of a list verdict: `0`, or `{of: bullets, min: 1, max: 2}` for a list inside an object |
+| `items` | entries of a list verdict found by `where: {id: m1}`; then `has: {needs_reply: false}`, or `absent: true`, or `optional: true` (fine to leave out, wrong to get wrong) |
+| `verdict` | fields of an object verdict, e.g. `{send: false}` |
+| `text_matches` / `text_not_matches` | regexes on the raw verdict |
+| `judge` | a rubric an LLM grades the verdict against |
+
+**Replaying real decisions.** Every real judgment is kept for 14 days in `decisions.jsonl`
+(what the judge was shown and what it said; see `decisions.py`). Before changing a judge's
+prompt or model, `python3 -m evals --replay <judge> --last 20` puts its last real questions
+to the prompt and model as they now are and prints the verdicts that changed. It reads
+your real mail and calendar excerpts from that file and prints them only to your terminal.
+When a judge gets something wrong in real life, find it with `python3 decisions.py --about
+<subject> --full`, then write the same shape with invented names as a scenario.
+

@@ -50,6 +50,8 @@ DEFAULT_FAKES = {
     "add_memory": "Saved to memory.",
     "search_memory": "No relevant memories found.",
     "look_up": "Nothing found on '{about}' in memory, mail, calendar, commitments or people notes.",
+    "explain_decision": ("Nothing in the last 14 days of background decisions mentions "
+                         "'{about}'. Say you can't see why rather than guessing."),
     "update_memory": "Profile updated: {key} = {value}",
     "read_and_summarize_emails": "Processed 3 emails. Summary generated.",
     "read_email_thread": "No matching email thread found for '{search_query}'.",
@@ -165,6 +167,10 @@ class Sandbox:
         import situation
         self._start(situation, "describe", lambda commitments: str(
             self.overrides.get("situation", "")).strip())
+
+        # Nothing an eval does is a real background decision.
+        import decisions
+        self._start(decisions, "LOG_PATH", os.path.join(d, "decisions.jsonl"))
 
         # Subscription brain: throwaway session state, no Telegram alerts, fresh fallback.
         from pathlib import Path

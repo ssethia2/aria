@@ -12,6 +12,8 @@ checked with deterministic assertions and, where judgment is the point, an LLM j
     python3 -m evals --trials 3         # flakiness: pass rate per scenario
     python3 -m evals --brain api        # exercise the API brain (bills the API)
     python3 -m evals --list
+    python3 -m evals --only judges      # the background judges (screener, reconcile, chase…)
+    python3 -m evals --replay reconcile # re-ask a judge its recent REAL questions
 
 Scenarios: evals/scenarios/*.yaml (format in evals/README.md). Results: evals/results/
 (gitignored) — every run is diffed against the previous one to flag regressions.
@@ -43,8 +45,9 @@ if ROOT not in sys.path:
 #   {{today+3}} -> 2026-10-18     {{weekday:today+3}} -> Sunday   {{wd:today+1}} -> Fri
 #   {{longdate:today+7}} -> Thursday, October 22   {{monthday:today+2}} -> October 17
 #   {{annual:03-14}} -> the NEXT March 14 (this year's, or next year's if it has passed)
+#   {{day:today-2}} -> Sat Nov 14 (how mail and calendar lines are dated in judge prompts)
 
-_TPL = re.compile(r"\{\{\s*(?:(?P<fmt>iso|weekday|wd|longdate|monthday):)?"
+_TPL = re.compile(r"\{\{\s*(?:(?P<fmt>iso|weekday|wd|longdate|monthday|day):)?"
                   r"(?:today(?P<off>[+-]\d+)?|annual:(?P<md>\d{2}-\d{2}))\s*\}\}")
 
 
@@ -63,6 +66,8 @@ def _fmt(d: date, fmt: str) -> str:
         return f"{d.strftime('%A, %B')} {d.day}"
     if fmt == "monthday":
         return f"{d.strftime('%B')} {d.day}"
+    if fmt == "day":
+        return f"{d.strftime('%a %b')} {d.day}"
     return d.isoformat()
 
 
@@ -283,6 +288,196 @@ def _first_json_object(text: str) -> dict:
     return obj if isinstance(obj, dict) else {}
 
 
+# ---- background judges -----------------------------------------------------------------
+# The chat agent is one of Aria's minds; the other is the set of single questions her
+# engine puts to a model in the background (is this email worth flagging, is this
+# commitment already handled, is a nudge worth sending). A scenario with `judge:` puts
+# that question through engine.ask, the same prompt and tier production uses, and checks
+# the verdict. Nothing is fetched: the scenario supplies what the judge is shown.
+
+JUDGE_EXPECT = {"count", "items", "verdict", "text_matches", "text_not_matches", "judge"}
+_FIELD_DEFAULTS = {"rules": "(none)", "told": "(nothing in the last two days)", "recent": "",
+                   "existing": "(none)", "calendar": "(nothing)", "commitments": "(none)",
+                   "situation": "(nothing in his mail or calendar about these)"}
+
+BACKGROUND_JUDGE_PROMPT = """You are grading ONE decision by a background judge inside Aria, a personal AI
+assistant, in a regression test. The judge was shown the material below and answered with
+the verdict below. Judge ONLY against the rubric. Be strict about what the rubric says and
+fair about wording.
+
+Why this scenario exists: {why}
+
+What the judge was shown:
+{shown}
+
+The judge's verdict:
+\"\"\"{reply}\"\"\"
+
+Rubric. PASS only if ALL of it holds:
+{rubric}
+
+Respond with ONLY a JSON object: {{"pass": true or false, "reason": "<one short sentence>"}}"""
+
+
+def judge_field_names(judge: str) -> set:
+    import string
+    import engine
+    return {name for _, name, _, _ in string.Formatter().parse(engine.JUDGES[judge][0]) if name}
+
+
+def judge_fields(judge: str, given: dict, today: date) -> dict:
+    """The prompt's fields: what the scenario gives, and a neutral default for the rest.
+    Lists and dicts are shown as JSON, the way the engine shows them."""
+    import engine
+    import situation
+    kind, touchpoint = (given.get("moment") or ["meeting", "before"])
+    fields = {}
+    for name in judge_field_names(judge):
+        if name in given:
+            v = given[name]
+            fields[name] = v if isinstance(v, str) else json.dumps(v, indent=2)
+        elif name == "guide":
+            fields[name] = situation.MAIL_GUIDE
+        elif name == "today":
+            fields[name] = (today.strftime('%A %Y-%m-%d') if judge == "reconcile"
+                            else today.isoformat())
+        elif name == "now":
+            fields[name] = f"{today.strftime('%a')} {today.day} {today.strftime('%b')}, 10:00 AM"
+        elif name == "when":
+            fields[name] = f"{today.strftime('%A')} 10AM"
+        elif name == "guidance":
+            fields[name] = engine.MomentMonitor.GUIDANCE[(kind, touchpoint)]
+        elif name == "touchpoint":
+            fields[name] = touchpoint
+        else:
+            fields[name] = _FIELD_DEFAULTS.get(name, "(none)")
+    return fields
+
+
+def _same(actual, expected) -> bool:
+    return str(actual).strip().lstrip("#").lower() == str(expected).strip().lstrip("#").lower()
+
+
+def check_verdict(expect: dict, verdict, reply: str) -> list:
+    """Deterministic checks on a judge's parsed verdict (a list or an object)."""
+    fails = []
+    if "count" in expect:
+        spec = expect["count"] if isinstance(expect["count"], dict) else {"is": expect["count"]}
+        seq = verdict.get(spec["of"]) if spec.get("of") and isinstance(verdict, dict) else verdict
+        if not isinstance(seq, list):
+            fails.append("count: the verdict has no list to count")
+        else:
+            n = len(seq)
+            if "is" in spec and n != spec["is"]:
+                fails.append(f"expected {spec['is']} item(s), got {n}")
+            if "max" in spec and n > spec["max"]:
+                fails.append(f"expected at most {spec['max']} item(s), got {n}")
+            if "min" in spec and n < spec["min"]:
+                fails.append(f"expected at least {spec['min']} item(s), got {n}")
+    items = [it for it in verdict if isinstance(it, dict)] if isinstance(verdict, list) else []
+    for want in expect.get("items", []) or []:
+        where = want["where"]
+        found = next((it for it in items
+                      if all(_same(it.get(k), v) for k, v in where.items())), None)
+        if want.get("absent"):
+            if found:
+                fails.append(f"an item where {where} should not be in the verdict")
+            continue
+        if not found:
+            if not want.get("optional"):     # optional: fine to leave out, wrong to get wrong
+                fails.append(f"no item where {where}")
+            continue
+        for key, value in (want.get("has") or {}).items():
+            if not match_value(found.get(key), value):
+                fails.append(f"item {where}: {key} is {found.get(key)!r}, expected {value!r}")
+    for key, value in (expect.get("verdict") or {}).items():
+        actual = verdict.get(key) if isinstance(verdict, dict) else None
+        if not match_value(actual, value):
+            fails.append(f"verdict.{key} is {actual!r}, expected {value!r}")
+    for pat in expect.get("text_matches", []) or []:
+        if not re.search(pat, reply, re.I | re.S):
+            fails.append(f"verdict doesn't match /{pat}/")
+    for pat in expect.get("text_not_matches", []) or []:
+        if re.search(pat, reply, re.I | re.S):
+            fails.append(f"verdict matches /{pat}/ and shouldn't")
+    return fails
+
+
+def _grade_verdict(rubric, why, fields, reply, tier="standard"):
+    from llm_router import get_llm, reply_text
+    shown = "\n\n".join(f"[{k}]\n{v}" for k, v in fields.items()
+                         if k not in ("guide", "guidance"))
+    try:
+        out = reply_text(get_llm(temperature=0, tier=tier).invoke(BACKGROUND_JUDGE_PROMPT.format(
+            why=why or "(none)", shown=shown, reply=reply, rubric=rubric)))
+        verdict = _first_json_object(out)
+        return bool(verdict.get("pass")), str(verdict.get("reason") or out[:200])
+    except Exception as e:
+        return False, f"judge unavailable ({type(e).__name__}: {str(e)[:120]})"
+
+
+def run_judge_scenario(sc: dict, today: date, judge_tier="standard") -> dict:
+    """One background judgment, asked exactly as the engine asks it. Shaped like a chat
+    scenario's result (one 'turn') so reporting and regression tracking are shared."""
+    import engine
+    sc = resolve(sc, today)
+    expect = sc.get("expect") or {}
+    reply, fails, judged, t0 = "", [], None, time.time()
+    try:
+        fields = judge_fields(sc["judge"], sc.get("fields") or {}, today)
+        reply = engine.ask(sc["judge"], record=False, **fields)
+        fails = check_verdict(expect, engine._parse_llm_json(reply), reply)
+        if expect.get("judge"):
+            ok, reason = _grade_verdict(expect["judge"], sc.get("why"), fields, reply, judge_tier)
+            judged = {"pass": ok, "reason": reason}
+            if not ok:
+                fails.append(f"judge: {reason}")
+    except Exception as e:
+        fails = [f"judge raised {type(e).__name__}: {str(e)[:300]}"]
+    turn = {"user": f"[{sc['judge']}]", "reply": reply, "path": "judge",
+            "served_by": engine.JUDGES[sc["judge"]][1], "calls": [], "failures": fails,
+            "judge": judged, "seconds": round(time.time() - t0, 1), "fallback": None}
+    return {"passed": not fails, "turns": [turn], "brain": None, "log": ""}
+
+
+def replay(judge: str, last: int = 20) -> int:
+    """Put a judge's most recent REAL questions to the prompt and model as they are now,
+    and show where the answer differs from what it said then. Run before shipping a change
+    to a judge's prompt or model. Reads decisions.jsonl; prints to the terminal only."""
+    import decisions
+    import engine
+    if judge not in engine.JUDGES:
+        print(f"No judge named {judge!r}. Judges: {', '.join(engine.JUDGES)}")
+        return 1
+    entries = decisions.read(judge=judge, questions_only=True, limit=last)
+    if not entries:
+        print(f"No recorded {judge} decisions yet (they accumulate as she runs).")
+        return 1
+    names = judge_field_names(judge)
+    changed = skipped = 0
+    for e in entries:
+        fields = e.get("fields", {})
+        if set(fields) != names:
+            skipped += 1     # recorded under an older prompt with different fields
+            continue
+        try:
+            now_said = engine.ask(judge, record=False, **fields)
+            before, after = engine._parse_llm_json(e["reply"]), engine._parse_llm_json(now_said)
+        except Exception as err:
+            print(f"⚠️  {e['at']}: couldn't replay ({type(err).__name__}: {str(err)[:100]})")
+            continue
+        if before == after:
+            print(f"=  {e['at']}  same verdict")
+            continue
+        changed += 1
+        print(f"≠  {e['at']}\n     then: {json.dumps(before, ensure_ascii=False)[:600]}"
+              f"\n     now:  {json.dumps(after, ensure_ascii=False)[:600]}")
+    print(f"\n{changed} of {len(entries) - skipped} replayed {judge} decision(s) changed"
+          + (f" ({skipped} skipped: recorded under an older prompt)" if skipped else "")
+          + ". Wording differs run to run; read the changed ones for a different decision.")
+    return 0
+
+
 # ---- running scenarios ---------------------------------------------------------------
 
 def load_scenarios(directory=SCENARIO_DIR) -> list:
@@ -343,6 +538,8 @@ def _respond(agent, thread_id: str, text: str, use_quick: bool):
 
 def run_scenario(sc: dict, brain: str, trial: int, today: date, use_quick=True,
                  judge_tier="standard", live_context=False) -> dict:
+    if sc.get("judge"):
+        return run_judge_scenario(sc, today, judge_tier)
     from evals.sandbox import Sandbox
     sc = resolve(sc, today)
     thread_id = f"eval-{sc['id']}-t{trial}"
@@ -443,6 +640,10 @@ def main(argv=None) -> int:
     ap.add_argument("--live-context", action="store_true",
                     help="use copies of YOUR real profile/rules/people instead of fixtures")
     ap.add_argument("--list", action="store_true", help="list scenarios and exit")
+    ap.add_argument("--replay", metavar="JUDGE",
+                    help="re-ask a background judge its recent real questions and show "
+                         "which verdicts change (run before changing its prompt or model)")
+    ap.add_argument("--last", type=int, default=20, help="how many decisions --replay re-asks")
     args = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(line_buffering=True)   # live progress even when piped
@@ -451,6 +652,9 @@ def main(argv=None) -> int:
 
     from dotenv import load_dotenv
     load_dotenv(os.path.join(ROOT, ".env"))
+
+    if args.replay:
+        return replay(args.replay, args.last)
 
     scenarios = load_scenarios()
     if args.only:
@@ -478,7 +682,8 @@ def main(argv=None) -> int:
             r = run_scenario(sc, args.brain, trial, today, use_quick=not args.no_quick,
                              judge_tier=args.judge_tier, live_context=args.live_context)
             runs.append(r)
-            brains_seen.add(r["brain"])
+            if r["brain"]:
+                brains_seen.add(r["brain"])
             fallback_turns += sum(1 for t in r["turns"] if t["served_by"] == "api-fallback")
         passed = sum(r["passed"] for r in runs)
         secs = sum(t["seconds"] for r in runs for t in r["turns"])
@@ -501,7 +706,7 @@ def main(argv=None) -> int:
     full = sum(1 for r in results.values() if r["passed"] == r["trials"])
     spend = _total_spend() - spend0
     elapsed = time.time() - t_start
-    brain = "/".join(sorted(brains_seen))
+    brain = "/".join(sorted(brains_seen)) or "judges"
 
     prev = _previous_results(brain, set(results))
     regressions, fixes = [], []

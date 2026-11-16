@@ -1,0 +1,364 @@
+# Background judges: the single questions Aria's engine puts to a model on its own (is this
+# email worth flagging, is this commitment already handled, is a nudge worth sending).
+# Each scenario gives one judge exactly what it would be shown and checks its verdict,
+# through the same prompt and tier production uses (engine.JUDGES). All people and
+# companies here are invented.
+
+# ---- the email screener ----------------------------------------------------------------
+
+- id: screen-confirmation-of-a-booked-interview
+  judge: email-screen
+  why: "He booked the interview himself and it was on his calendar; the coordinator's confirmation was still tracked as a reply he owed and chased for days."
+  fields:
+    calendar: "{{day:today+3}}, 2:00 PM — Acme: technical interview"
+    emails:
+      - id: m1
+        sender: "Jo Park <jo.park@acme.example>"
+        subject: "Confirmed: your technical interview with Acme"
+        snippet: "Hi, this confirms your technical interview on {{weekday:today+3}} at 2:00 PM. You'll meet two engineers. A calendar invite is attached. Let us know if anything changes."
+        he_replied_in_thread: true
+        earlier_in_thread:
+          - {direction: received, snippet: "Please pick a slot for your technical interview using the link below."}
+          - {direction: sent, snippet: "Booked {{weekday:today+3}} at 2 PM. Thanks!"}
+  expect:
+    items:
+      - {where: {id: m1}, optional: true, has: {needs_reply: false}}
+
+- id: screen-recruiter-he-is-talking-to-asks-for-times
+  judge: email-screen
+  why: "A recruiter he had been writing to for a week was digested as cold outreach he could ignore, because the email was judged without its thread."
+  fields:
+    emails:
+      - id: m1
+        sender: "Sam Rivera <sam@northwind.example>"
+        subject: "Re: Next steps with Northwind"
+        snippet: "Great to hear you're interested. Could you send me a few times that work next week for a 30 minute call with the hiring manager?"
+        he_replied_in_thread: true
+        earlier_in_thread:
+          - {direction: received, snippet: "I'm a recruiter at Northwind. Your background looks like a fit for our platform team. Open to a chat?"}
+          - {direction: sent, snippet: "Yes, I'd like to hear more. Happy to talk."}
+  expect:
+    items:
+      - {where: {id: m1}, has: {needs_reply: true}}
+
+- id: screen-cold-recruiter-bump-owes-nothing
+  judge: email-screen
+  why: "A follow-up on outreach he never answered is still outreach; tracking it as a reply owed is how the list filled with things he would never do."
+  fields:
+    emails:
+      - id: m1
+        sender: "Dana Cole <dana@talentfirm.example>"
+        subject: "Re: Exciting opportunity, following up"
+        snippet: "Just bumping this to the top of your inbox. Do you have 15 minutes this week to discuss a senior role with one of our clients?"
+        he_replied_in_thread: false
+        earlier_in_thread:
+          - {direction: received, snippet: "I came across your profile and have an exciting opportunity with a fast-growing client."}
+  expect:
+    items:
+      - {where: {id: m1}, optional: true, has: {needs_reply: false}}
+
+- id: screen-memory-makes-routine-mail-matter
+  judge: email-screen
+  why: "Mail from a company he is interviewing with read as a routine notice, because what he had told her in chat never reached the screener."
+  fields:
+    emails:
+      - id: m1
+        sender: "Northwind Careers <careers@northwind.example>"
+        subject: "An update on your application"
+        snippet: "Thank you for your time last week. The team would like to move you to the final round. Your recruiter will follow up with details."
+        he_replied_in_thread: false
+        you_remember: "[{{today-6}}] He had a first-round interview with Northwind for the platform engineer role and is waiting to hear back."
+      - id: m2
+        sender: "The Weekly Byte <hello@weeklybyte.example>"
+        subject: "This week: 7 tools we loved"
+        snippet: "Plus a reader survey and a discount on the annual plan."
+        he_replied_in_thread: false
+  expect:
+    items:
+      - {where: {id: m1}}
+      - {where: {id: m2}, absent: true}
+    text_matches: ["final round|next round|moved|advanc"]
+
+- id: screen-standing-rule-asks-for-an-immediate-alert
+  judge: email-screen
+  why: "His rules used to reach only the chat agent, so the screener kept doing what he had told her not to."
+  fields:
+    rules: "  1. Alert me right away about interview invites."
+    emails:
+      - id: m1
+        sender: "Jo Park <jo.park@acme.example>"
+        subject: "Invitation: onsite interview with Acme"
+        snippet: "We'd like to invite you to an onsite interview. Please choose a date from the options in the link."
+        he_replied_in_thread: true
+        earlier_in_thread:
+          - {direction: sent, snippet: "Thanks for the call today. Looking forward to next steps."}
+  expect:
+    items:
+      - {where: {id: m1}, has: {alert_now: true}}
+
+- id: screen-newsletter-and-receipt-are-not-flagged
+  judge: email-screen
+  why: "The digest is for the few emails that need him; flagging bulk mail is how it became noise."
+  fields:
+    emails:
+      - id: m1
+        sender: "The Weekly Byte <hello@weeklybyte.example>"
+        subject: "This week: 7 tools we loved"
+        snippet: "Plus a reader survey and a discount on the annual plan."
+        he_replied_in_thread: false
+      - id: m2
+        sender: "Corner Cafe <receipts@cornercafe.example>"
+        subject: "Your receipt from Corner Cafe"
+        snippet: "Thanks for visiting. Total: 4.50. Rate your visit."
+        he_replied_in_thread: false
+  expect:
+    count: 0
+
+- id: screen-a-changed-time-says-what-changed
+  judge: email-screen
+  why: "An email that changes something already on his calendar must say what changed, not read as one more confirmation."
+  fields:
+    calendar: "{{day:today+2}}, 2:00 PM — Acme: technical interview"
+    emails:
+      - id: m1
+        sender: "Jo Park <jo.park@acme.example>"
+        subject: "Updated: your technical interview with Acme"
+        snippet: "One of the interviewers has a conflict, so we've moved your interview to {{weekday:today+2}} at 4:30 PM. Same video link. Sorry for the shuffle."
+        he_replied_in_thread: true
+        earlier_in_thread:
+          - {direction: sent, snippet: "Booked {{weekday:today+2}} at 2 PM. Thanks!"}
+  expect:
+    items:
+      - {where: {id: m1}}
+    text_matches: ["4:30"]
+
+# ---- does an email prove a commitment done? ----------------------------------------------
+
+- id: proof-his-own-email-says-it-is-done
+  judge: email-proof
+  why: "He told the company he had finished the assessment and she kept nudging him about it for two more days."
+  fields:
+    commitments: "#4 Finish the Acme coding assessment (due {{today+1}})\n#5 Send Kim the lease documents"
+    emails:
+      - {id: s1, direction: sent, to: "jo.park@acme.example", subject: "Re: Acme coding assessment", snippet: "Hi Jo, I just completed the assessment. Looking forward to next steps."}
+  expect:
+    count: 1
+    items:
+      - {where: {commitment_id: 4}, has: {email_id: s1}}
+
+- id: proof-a-reminder-is-not-proof
+  judge: email-proof
+  why: "Completion is destructive: mail that is merely about the task must never close it."
+  fields:
+    commitments: "#4 Finish the Acme coding assessment (due {{today+1}})"
+    emails:
+      - {id: r1, direction: received, from: "Acme Hiring <hiring@acme.example>", subject: "Reminder: your Acme coding assessment is due tomorrow", snippet: "Don't forget to complete your assessment before the deadline."}
+  expect:
+    count: 0
+
+# ---- reconcile: is this commitment already handled? ---------------------------------------
+
+- id: reconcile-his-reply-closes-a-reply-owed
+  judge: reconcile
+  why: "She kept listing replies he had already sent, because nothing read his sent mail against the list."
+  fields:
+    commitments: "#7 [reply_owed] Reply to Kim Lee: Dinner on Saturday? (tracked since {{today-3}} 09:12)"
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #7 Reply to Kim Lee: Dinner on Saturday? (tracked since {{today-3}}):
+          {{day:today-3}}, received from Kim Lee: “Dinner on Saturday?” — Are you free Saturday evening? Thinking 7:30 at the usual place.
+          {{day:today-1}}, HE SENT to Kim Lee: “Re: Dinner on Saturday?” — Saturday works, see you at 7:30.
+  expect:
+    count: 1
+    items:
+      - {where: {commitment_id: 7}, has: {source: mail, quote: {contains: "Dinner on Saturday"}}}
+
+- id: reconcile-the-calendar-event-closes-a-scheduling-item
+  judge: reconcile
+  why: "The interview was on his calendar and she was still telling him to schedule it."
+  fields:
+    commitments: "#8 [promise] Schedule the Acme technical interview (tracked since {{today-4}} 10:00)"
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #8 Schedule the Acme technical interview (tracked since {{today-4}}):
+          {{day:today-4}}, received from Jo Park: “Schedule your technical interview” — Please pick a slot using the link below.
+
+      On his calendar, past 21 days to next 30 days:
+        {{day:today+3}}, 2:00 PM — Acme: technical interview
+  expect:
+    count: 1
+    items:
+      - {where: {commitment_id: 8}, has: {source: calendar, quote: {contains: "Acme"}}}
+
+- id: reconcile-the-event-he-must-prepare-for-closes-nothing
+  judge: reconcile
+  why: "An event on the calendar is not proof he has prepared for it; closing prep work early is the costly mistake."
+  fields:
+    commitments: "#9 [promise] Prepare the system design walkthrough for the Acme interview (tracked since {{today-4}} 10:00)"
+    situation: |
+      On his calendar, past 21 days to next 30 days:
+        {{day:today+3}}, 2:00 PM — Acme: technical interview
+  expect:
+    count: 0
+
+- id: reconcile-recruiter-reply-not-settled-by-the-coordinator
+  judge: reconcile
+  why: "A coordinator booked the interview, but the recruiter's own question still wanted his answer; the booking closed the wrong reply."
+  fields:
+    commitments: "#10 [reply_owed] Reply to Sam Rivera: Following up after our call (tracked since {{today-2}} 11:00)"
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #10 Reply to Sam Rivera: Following up after our call (tracked since {{today-2}}):
+          {{day:today-2}}, received from Sam Rivera: “Following up after our call” — Great talking today. Could you send me your salary expectations and earliest start date?
+          {{day:today-1}}, received from Northwind Scheduling: “Your interview is booked” — You're confirmed for {{weekday:today+4}} at 11:00 AM.
+
+      On his calendar, past 21 days to next 30 days:
+        {{day:today+4}}, 11:00 AM — Northwind: onsite interview
+  expect:
+    count: 0
+
+# ---- the chase loop: is a nudge worth sending? --------------------------------------------
+
+- id: chase-quiet-when-he-already-replied
+  judge: chase
+  why: "She nudged him to reply to threads he had answered, reading the list without the mail around it."
+  fields:
+    commitments:
+      - {id: 12, description: "Reply to Sam Rivera: Lease renewal terms", kind: reply_owed, who: "Sam Rivera", due_date: null, source: email, created_at: "{{today-5}} 09:00:00", last_nudged: null, times_rescheduled: 0}
+    situation: |
+      Mail from the last 21 days that may concern them, oldest first:
+        #12 Reply to Sam Rivera: Lease renewal terms (tracked since {{today-5}}):
+          {{day:today-5}}, received from Sam Rivera: “Lease renewal terms” — Here are the proposed terms for next year. Let me know what you think.
+          {{day:today-1}}, HE SENT to Sam Rivera: “Re: Lease renewal terms” — Thanks Sam. The terms work for me, please send the paperwork.
+  expect:
+    text_not_matches: ["still owe", "haven't replied", "need to reply", "get back to Sam"]
+    judge: "Either send is false, or the message makes clear the lease reply has already gone out. It must not ask him to reply to Sam."
+
+- id: chase-speaks-up-about-something-overdue
+  judge: chase
+  why: "Silence is the default, but an overdue deadline with nothing moving is exactly what the loop exists for."
+  fields:
+    commitments:
+      - {id: 14, description: "Submit the visa renewal form", kind: deadline, who: null, due_date: "{{today-1}}", source: chat, created_at: "{{today-9}} 09:00:00", last_nudged: null, times_rescheduled: 0}
+  expect:
+    verdict: {send: true}
+    text_matches: ["visa"]
+    judge: "The message is one short text in first person about the overdue visa form, offers one concrete thing she can do, and does not read as nagging or as a status report."
+
+- id: chase-does-not-repeat-what-she-just-said
+  judge: chase
+  why: "Each monitor used to speak without knowing what another had said an hour earlier."
+  fields:
+    told: "- {{wd:today}} 9:05 AM: The visa renewal form was due yesterday. Want me to block 30 minutes this afternoon for it?"
+    commitments:
+      - {id: 14, description: "Submit the visa renewal form", kind: deadline, who: null, due_date: "{{today-1}}", source: chat, created_at: "{{today-9}} 09:00:00", last_nudged: null, times_rescheduled: 0}
+  expect:
+    verdict: {send: false}
+
+- id: chase-a-standing-rule-binds-it
+  judge: chase
+  why: "A rule he set in chat must bind every monitor, not only the chat agent."
+  fields:
+    rules: "  1. Never bring up Kim's surprise party in messages to me; she sometimes sees my phone."
+    commitments:
+      - {id: 15, description: "Order the cake for Kim's surprise party", kind: promise, who: null, due_date: "{{today+1}}", source: chat, created_at: "{{today-4}} 09:00:00", last_nudged: null, times_rescheduled: 0}
+  expect:
+    text_not_matches: ["party", "cake", "surprise"]
+
+# ---- the evening digest ------------------------------------------------------------------
+
+- id: digest-one-bullet-per-matter-as-things-stand
+  judge: digest
+  why: "The digest listed three emails about one interview, and asked for a reply on a thread he had answered that afternoon."
+  fields:
+    calendar: "{{day:today+3}}, 2:00 PM — Acme: technical interview"
+    notes:
+      - {at: "{{wd:today}} 9:10 AM", sender: "Sam Rivera <sam@acme.example>", subject: "Next steps with Acme", reason: "Recruiter asks you to pick an interview slot; may need a reply.", since: "you've replied since"}
+      - {at: "{{wd:today}} 11:40 AM", sender: "Jo Park <jo.park@acme.example>", subject: "Schedule your technical interview", reason: "Coordinator's link to book the technical interview."}
+      - {at: "{{wd:today}} 1:15 PM", sender: "Jo Park <jo.park@acme.example>", subject: "Confirmed: your technical interview with Acme", reason: "Confirms the technical interview for {{weekday:today+3}} at 2 PM."}
+      - {at: "{{wd:today}} 3:30 PM", sender: "Kim Lee <kim@example.com>", subject: "Dinner on Saturday?", reason: "Kim asks if you're free Saturday evening; needs a reply.", tracked: "#22"}
+  expect:
+    count: {of: bullets, min: 2, max: 2}
+    text_matches: ["tracking reply as #22"]
+    judge: "Acme is ONE bullet that says the technical interview is confirmed or set; it does not ask him to reply or to book. The other bullet is Kim's dinner question and says it needs his reply."
+
+# ---- heads-ups before something on his calendar --------------------------------------------
+
+- id: moment-heads-up-carries-what-the-thread-asked-for
+  judge: moment
+  why: "A heads-up that only repeats the calendar is noise; the point is what the thread said to have ready and who he is meeting."
+  fields:
+    moment: [meeting, before]
+    event: |
+      meeting: Acme: technical interview
+      when: {{wd:today}} 2:00 PM your time, starts in 4h 00m
+      with: Jo Park <jo.park@acme.example>
+      video link: https://meet.example.com/acme-tech-123
+    found: |
+      Email thread "Confirmed: your technical interview with Acme":
+      From Jo Park: You'll meet Priya Shah and Tom Reyes, both engineers on the platform team. The session is 60 minutes: a system design exercise, then questions. Please have a whiteboarding tool ready and bring a recent project you can walk through.
+  expect:
+    verdict: {send: true}
+    text_matches: ["Priya|Tom", "system design|whiteboard|project"]
+    text_not_matches: ["heads up", "quick one"]
+
+- id: moment-stays-silent-with-nothing-to-add
+  judge: moment
+  why: "His calendar already reminds him the event exists; a text that adds nothing teaches him to ignore her."
+  fields:
+    moment: [meeting, before]
+    event: |
+      meeting: Weekly sync
+      when: {{wd:today}} 2:00 PM your time, starts in 4h 00m
+      video link: https://meet.example.com/weekly-sync
+    found: "(no related email)"
+  expect:
+    verdict: {send: false}
+
+- id: moment-never-gives-a-link-the-event-does-not
+  judge: moment
+  why: "Emails carry old and cancelled versions of a meeting; she once passed on a join link that was no longer the meeting."
+  fields:
+    moment: [meeting, before]
+    event: |
+      meeting: Northwind: hiring manager call
+      when: {{wd:today}} 2:00 PM your time, starts in 4h 00m
+      with: Sam Rivera <sam@northwind.example>
+      video link: https://meet.example.com/northwind-new-456
+    found: |
+      Email thread "Call with our hiring manager":
+      From Sam Rivera: You'll be speaking with Dev Malik, who leads the platform team. He'll want to hear about a system you scaled. Join here: https://meet.example.com/northwind-old-111
+  expect:
+    text_matches: ["northwind-new-456"]
+    text_not_matches: ["https://meet\\.example\\.com/northwind-old-111"]
+
+# ---- unprompted insights -------------------------------------------------------------------
+
+- id: insight-says-nothing-on-an-ordinary-day
+  judge: insight
+  why: "Proactivity that restates his calendar gets switched off; the default is silence."
+  fields:
+    context: |
+      OPEN COMMITMENTS:
+      #3 Renew gym membership — due {{today+3}}
+
+      CALENDAR (next 2 days):
+      {{wd:today}} 1:00 PM — Lunch with Kim
+      {{wd:today+1}} 10:00 AM — Team standup
+
+      WEATHER:
+      Today: 18°C, clear
+  expect:
+    verdict: {send: false}
+
+- id: insight-flags-a-clash-he-might-miss
+  judge: insight
+  why: "Two things at the same hour is the kind of remark a good chief of staff makes unprompted."
+  fields:
+    context: |
+      CALENDAR (next 2 days):
+      {{wd:today+1}} 2:00 PM — Acme: technical interview
+      {{wd:today+1}} 2:15 PM — Dentist appointment
+  expect:
+    verdict: {send: true}
+    text_matches: ["dentist", "interview|Acme"]

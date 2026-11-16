@@ -88,6 +88,22 @@ def look_up(about: str) -> str:
 
 
 @tool
+def explain_decision(about: str) -> str:
+    """Why your background side did something on its own: flagged or ignored an email,
+    started tracking a reply, closed or let go of a commitment, sent or held back a nudge.
+    Returns what that judgment was shown and what it decided, from the record of the last
+    two weeks. Use it when he asks why you did, or didn't do, something by yourself ("why
+    did you close that?", "why are you still tracking this?", "why didn't you tell me
+    about that email?"). Things done in chat aren't in it. READ-ONLY.
+
+    Args:
+        about: the name, company or subject, e.g. 'Acme', 'Kim', 'dentist'.
+    """
+    import decisions
+    return decisions.explain(about)
+
+
+@tool
 def read_and_summarize_emails() -> str:
     """Use this tool to read the user's recent emails, categorize them, and delete junk."""
     classifications, raw_emails = run_email_summary()
@@ -122,6 +138,7 @@ def build_tools(guest=False):
         add_memory,
         search_memory,
         look_up,
+        explain_decision,
         read_and_summarize_emails,
         read_email_thread,
         generate_morning_news,
@@ -307,6 +324,7 @@ deny having done something without checking.
 
 You have access to a semantic memory database and several active skills.
 - Use `look_up` whenever he mentions or asks about a person, company, trip or topic with history: it returns your memory, his mail both ways, his calendar, his commitments and your people notes together. His texts to you, his email, his calendar and your memory are ONE picture; never answer from one of them alone when the others could change the answer.
+- Use `explain_decision` when he asks WHY you did or didn't do something on your own (closed an item, tracked or dropped a reply, flagged or skipped an email, nudged or stayed quiet). It shows what that judgment actually saw and decided. Tell him the real reason in a sentence or two; if it finds nothing, say you can't see why. Never offer a guessed cause.
 - Use `search_memory` for his preferences and for things only memory holds.
 - Use `add_memory` when the user tells you a NEW fact, preference, or event about themselves. BE PROACTIVE in saving new preferences so you don't forget them!
 - Use `read_and_summarize_emails` when the user asks you to check their inbox or summarize their mail.

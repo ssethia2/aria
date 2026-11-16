@@ -44,6 +44,8 @@ daily_conversation.jsonl
 *.db-wal
 logs/
 engine_state.json
+decisions.jsonl
+decisions.jsonl.tmp
 briefing_state.json
 router_alerts.json
 calendar_config.json
