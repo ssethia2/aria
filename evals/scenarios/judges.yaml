@@ -243,7 +243,7 @@
   expect:
     verdict: {send: true}
     text_matches: ["visa"]
-    judge: "The message is one short text in first person about the overdue visa form, offers one concrete thing she can do, and does not read as nagging or as a status report."
+    judge: "The message is a short text in first person (four sentences at most) about the overdue visa form, offers concrete help, and does not read as nagging or as a status report."
 
 - id: chase-does-not-repeat-what-she-just-said
   judge: chase

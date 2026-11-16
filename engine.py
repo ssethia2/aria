@@ -1013,6 +1013,9 @@ stands ("the Acme interview is set for Thursday 2 PM; nothing owed there").
 
 His standing rules — follow them; they override the guidance above:
 {rules}
+When a rule says not to bring something up, leave out every item that belongs to it, even
+one that doesn't name it (the cake for a party he said never to mention is the party). If
+that leaves nothing worth a nudge, send nothing.
 
 Already told him in the last two days (don't repeat it):
 {told}
