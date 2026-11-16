@@ -187,6 +187,100 @@ class TestQueueAndFlush(TempStateMixin, unittest.TestCase):
         self.assertIn("ping", engine.load_state()["queued_notifications"])
 
 
+class TestUnsentMessagesAreKept(TempStateMixin, unittest.TestCase):
+    """A send that fails is held and retried, never dropped (the laptop wakes without a
+    network several times a day)."""
+
+    def setUp(self):
+        super().setUp()
+        self.up = False
+        self.sent = []
+
+    def notify(self, text):
+        if self.up:
+            self.sent.append(text)
+        return self.up
+
+    def engine(self, *notifications):
+        self.mon = StubMonitor(list(notifications), interval_seconds=1)
+        return ProactiveEngine([self.mon], notify_fn=self.notify, quiet_hours=(23, 8))
+
+    def test_failed_send_is_held_then_delivered_once(self):
+        eng = self.engine(Notification("call the bank"))
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 14, 0))
+        self.assertEqual([i["text"] for i in engine.load_state()["undelivered"]],
+                         ["call the bank"])
+
+        self.mon.notifications = []
+        self.up = True
+        eng.tick(now_monotonic=60, now=datetime(2026, 6, 10, 14, 1))
+        eng.tick(now_monotonic=120, now=datetime(2026, 6, 10, 14, 2))
+        self.assertEqual(self.sent, ["call the bank"])
+        self.assertEqual(engine.load_state()["undelivered"], [])
+
+    def test_a_late_message_says_when_it_was_written(self):
+        eng = self.engine(Notification("leave in ten minutes"))
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 14, 0))
+        self.mon.notifications = []
+        self.up = True
+        eng.tick(now_monotonic=3600, now=datetime(2026, 6, 10, 15, 0))
+        self.assertEqual(len(self.sent), 1)
+        self.assertTrue(self.sent[0].startswith("leave in ten minutes"))
+        self.assertIn("Written 2:00 PM", self.sent[0])
+
+    def test_held_messages_go_out_in_order_behind_the_one_that_failed(self):
+        eng = self.engine(Notification("first"))
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 14, 0))
+        self.mon.notifications = [Notification("second")]
+        self.up = True
+        eng.tick(now_monotonic=5, now=datetime(2026, 6, 10, 14, 0))
+        self.assertEqual(self.sent, ["first", "second"])
+
+    def test_retries_back_off_but_a_new_message_tries_at_once(self):
+        attempts = []
+        self.mon = StubMonitor([Notification("ping")], interval_seconds=1)
+        eng = ProactiveEngine([self.mon], notify_fn=lambda t: attempts.append(t) and False)
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 14, 0))
+        self.mon.notifications = []
+        eng.tick(now_monotonic=10, now=datetime(2026, 6, 10, 14, 0))     # inside the wait
+        self.assertEqual(len(attempts), 1)
+        eng.tick(now_monotonic=31, now=datetime(2026, 6, 10, 14, 0))     # wait is over
+        self.assertEqual(len(attempts), 2)
+        self.mon.notifications = [Notification("pong")]
+        eng.tick(now_monotonic=33, now=datetime(2026, 6, 10, 14, 0))     # new message
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual([i["text"] for i in engine.load_state()["undelivered"]],
+                         ["ping", "pong"])
+
+    def test_a_held_message_joins_the_morning_catch_up_once_its_quiet_hours(self):
+        eng = self.engine(Notification("fyi"), Notification("fire!", urgent=True))
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 22, 50))
+        self.mon.notifications = []
+        eng.tick(now_monotonic=3600, now=datetime(2026, 6, 10, 23, 30))
+        state = engine.load_state()
+        self.assertEqual(state["queued_notifications"], ["fyi"])
+        self.assertEqual([i["text"] for i in state["undelivered"]], ["fire!"])
+
+    def test_a_send_that_raises_counts_as_unsent(self):
+        def boom(text):
+            raise RuntimeError("socket closed")
+        self.mon = StubMonitor([Notification("ping")])
+        eng = ProactiveEngine([self.mon], notify_fn=boom)
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 14, 0))
+        self.assertEqual(len(engine.load_state()["undelivered"]), 1)
+
+    def test_the_morning_catch_up_waits_behind_held_messages(self):
+        eng = self.engine(Notification("overnight"))
+        eng.tick(now_monotonic=0, now=datetime(2026, 6, 10, 3, 0))        # queued
+        self.mon.notifications = [Notification("morning ping")]
+        eng.tick(now_monotonic=100, now=datetime(2026, 6, 10, 9, 0))      # network down
+        self.mon.notifications = []
+        self.up = True
+        eng.tick(now_monotonic=200, now=datetime(2026, 6, 10, 9, 2))
+        self.assertEqual(self.sent[0], "morning ping")
+        self.assertIn("overnight", self.sent[1])
+
+
 class TestEngineMechanics(TempStateMixin, unittest.TestCase):
     def test_monitor_interval_respected(self):
         mon = StubMonitor([], interval_seconds=600)

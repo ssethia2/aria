@@ -72,7 +72,7 @@ Use a root-level file/DB built from an absolute path, mirroring `calendar_manage
 Pin new packages in `requirements.txt` (the file is fully pinned). If a skill needs a system-level component (e.g. Playwright's browser), note the post-install step in the README's setup section, as the Netflix skill does (`playwright install chromium`).
 
 ## Testing & verification
-Run the offline unit tests with `python3 -m unittest discover tests` — they mock all Gmail/LLM/network access, so they're fast and safe. Add tests alongside any change to the email path (`send_email`'s allowlist behavior is contract, see ADR 0003).
+Run the offline unit tests with `python3 -m unittest discover tests` — they mock all Gmail/LLM/network access, so they're fast and safe. A guard in `tests/__init__.py` holds them to it: a test that writes real state or opens a network connection fails the run. Add tests alongside any change to the email path (`send_email`'s allowlist behavior is contract, see ADR 0003).
 
 **Agent behavior** is covered by the eval suite: `python3 -m evals` runs the real agent through scenario conversations in a sandbox (real brain; email/calendar/web faked; throwaway stores) and flags regressions vs the last run. Run it after any change to the system prompt, a tool's description, or the model — and when Aria gets something wrong in real life, add a scenario for it. Format and options: [evals/README.md](evals/README.md). For anything evals don't cover yet, verify manually:
 - Run the skill's tool in isolation (`python3 -c "from skills.x import tool; print(tool.invoke({...}))"`).

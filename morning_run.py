@@ -67,6 +67,22 @@ def due(now=None) -> datetime | None:
     return at
 
 
+def online(wait_seconds=90, pause=5) -> bool:
+    """Whether she can reach Telegram, waiting briefly for it. launchd fires this the
+    moment the laptop wakes, a few seconds before Wi-Fi is back."""
+    import socket
+    import time
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            socket.create_connection(("api.telegram.org", 443), timeout=5).close()
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(pause)
+
+
 def run():
     try:
         from nightly_compaction import compact_scratchpad
@@ -88,6 +104,12 @@ def main(force=False):
     if at is None and not force:
         return
     at = at or scheduled_for()
+    if not force and not online():
+        # Not an attempt. Offline, the briefing fails and so does the alert about it, and
+        # the day's briefing was simply gone (it happened twice in a week). Leave the
+        # slot open: launchd runs this again in 15 minutes.
+        print(f"Briefing for {at:%a %d %b} waiting for a network (checked {datetime.now():%H:%M})")
+        return
     # One attempt per slot: a failure alerts once (run_with_alerts) rather than every
     # 15 minutes until morning.
     state = dict(load_state(), slot=at.date().isoformat())

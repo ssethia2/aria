@@ -63,14 +63,38 @@ class TestSchedule(StateMixin, unittest.TestCase):
         seen = {}
         with patch.object(morning_run, "due", return_value=datetime(2026, 11, 3, 8, 0, tzinfo=NY)), \
              patch.object(morning_run, "run", side_effect=lambda: seen.update(morning_run.load_state())), \
+             patch.object(morning_run, "online", return_value=True), \
              patch("dotenv.load_dotenv"):
             morning_run.main()
         self.assertEqual(seen, {"slot": "2026-11-03"})          # marked before running
         self.assertIn("last_ok_ts", morning_run.load_state())
 
+    def test_offline_is_not_an_attempt(self):
+        ran = []
+        with patch.object(morning_run, "due", return_value=datetime(2026, 11, 3, 8, 0, tzinfo=NY)), \
+             patch.object(morning_run, "run", side_effect=lambda: ran.append(1)), \
+             patch("dotenv.load_dotenv"):
+            with patch.object(morning_run, "online", return_value=False):
+                morning_run.main()
+            self.assertEqual(ran, [])
+            self.assertNotIn("slot", morning_run.load_state())   # still due at the next wake
+            with patch.object(morning_run, "online", return_value=True):
+                morning_run.main()
+        self.assertEqual(ran, [1])
+        self.assertEqual(morning_run.load_state()["slot"], "2026-11-03")
+
+    def test_online_waits_for_the_network_then_gives_up(self):
+        clock = iter([0, 10, 20, 95])
+        with patch("socket.create_connection", side_effect=OSError("no route")) as connect, \
+             patch("time.monotonic", side_effect=lambda: next(clock)), \
+             patch("time.sleep"):
+            self.assertFalse(morning_run.online(wait_seconds=90))
+        self.assertEqual(connect.call_count, 3)
+
     def test_a_failed_run_is_not_retried_every_15_minutes(self):
         with patch.object(morning_run, "due", return_value=datetime(2026, 11, 3, 8, 0, tzinfo=NY)), \
              patch.object(morning_run, "run", side_effect=RuntimeError("gmail down")), \
+             patch.object(morning_run, "online", return_value=True), \
              patch("dotenv.load_dotenv"):
             with self.assertRaises(RuntimeError):
                 morning_run.main()

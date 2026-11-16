@@ -59,7 +59,11 @@ ACTION_LOG_PREFIX = "[Aria proactive action"
 # Initialize ChromaDB correctly on first load
 chroma_client = None
 try:
-    chroma_client = chromadb.PersistentClient(path=DB_PATH)
+    # Chroma reports usage to its maker (PostHog) unless told not to. His memory store
+    # doesn't phone anyone.
+    from chromadb.config import Settings
+    chroma_client = chromadb.PersistentClient(path=DB_PATH,
+                                              settings=Settings(anonymized_telemetry=False))
     collection = chroma_client.get_or_create_collection(name="aria_memory")
     embeddings = GoogleGenerativeAIEmbeddings(
         model="models/gemini-embedding-001",

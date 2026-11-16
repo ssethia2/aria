@@ -174,8 +174,9 @@ def main():
         def engine_notify(text: str) -> bool:
             ok = False
             for handle in allowed:
-                if send_imessage(handle, text):
-                    ok = True
+                if not send_imessage(handle, text):
+                    continue    # the engine keeps it and retries; don't record it as said
+                ok = True
                 try:
                     agent.update_state(thread_config(_thread_id(handle)),
                                        {"messages": [AIMessage(content=text)]})

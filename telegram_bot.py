@@ -377,6 +377,8 @@ def main():
 
         def engine_notify(text: str) -> bool:
             ok = telegram_broadcast(text)
+            if not ok:
+                return False    # the engine keeps it and retries; don't record it as said
             for chat_id in allowed:
                 try:
                     agent.update_state(thread_config(f"telegram-{chat_id}"),

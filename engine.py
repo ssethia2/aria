@@ -87,6 +87,22 @@ class Notification:
 
 NUDGE_BUDGET = 6        # judgment pings per day, across every monitor
 TOLD_WINDOW = timedelta(hours=48)
+OUTBOX_MAX = 40                       # unsent messages kept; past this the oldest go
+LATE_AFTER = timedelta(minutes=10)    # a message this late says when it was written
+RETRY_SECONDS = (30, 60, 120, 300)    # waits between attempts while delivery is down
+
+
+def _with_delay_note(item: dict, now: datetime) -> str:
+    """A message that couldn't go out when it was written says when that was, so a late
+    'leave in ten minutes' isn't read as current."""
+    try:
+        written = datetime.fromisoformat(item["at"])
+    except (KeyError, TypeError, ValueError):
+        return item["text"]
+    if now - written < LATE_AFTER:
+        return item["text"]
+    when = written.strftime('%-I:%M %p' if written.date() == now.date() else '%a %-I:%M %p')
+    return f"{item['text']}\n\n(Written {when}; I couldn't get it to you until now.)"
 
 
 def _remember_told(state: dict, text: str, now: datetime = None):
@@ -1485,6 +1501,8 @@ class ProactiveEngine:
         self.notify_fn = notify_fn
         self.quiet_start, self.quiet_end = quiet_hours
         self.tick_seconds = tick_seconds
+        self._retry_at = 0.0        # monotonic time of the next attempt while delivery is down
+        self._failures = 0
 
     def in_quiet_hours(self, now: datetime = None) -> bool:
         hour = (now or datetime.now()).hour
@@ -1509,9 +1527,11 @@ class ProactiveEngine:
                 print(f"[engine] ⚠️ monitor '{monitor.name}' failed: {e}")
 
         queue = state.setdefault("queued_notifications", [])
+        outbox = state.setdefault("undelivered", [])
         quiet = self.in_quiet_hours(now)
+        now = now or datetime.now()
 
-        today = (now or datetime.now()).strftime('%Y-%m-%d')
+        today = now.strftime('%Y-%m-%d')
         gate = state.get("gate", {})
         if gate.get("day") != today:
             gate = {"day": today, "nudges": 0}
@@ -1531,13 +1551,16 @@ class ProactiveEngine:
                 print(f"[engine] quiet hours — queued: {n.text[:60]!r}")
                 queue.append(n.text)
             else:
-                self.notify_fn(n.text)
+                outbox.append({"text": n.text, "urgent": n.urgent,
+                               "at": now.isoformat(timespec="minutes")})
 
         state["gate"] = gate
 
-        if not quiet and queue:
+        self._send_outbox(state, quiet, now, now_monotonic, fresh=bool(new_notifications))
+
+        if not quiet and queue and not state["undelivered"]:
             digest = "🌅 While you were away:\n\n" + "\n\n".join(f"• {t}" for t in queue)
-            if self.notify_fn(digest):
+            if self._send(digest):
                 state["queued_notifications"] = []
 
         # Dedicated liveness heartbeat: proves the ENGINE itself ran this loop, independent
@@ -1546,6 +1569,50 @@ class ProactiveEngine:
         state["engine_tick_ts"] = time.time()
 
         save_state(state)
+
+    def _send(self, text: str) -> bool:
+        try:
+            return bool(self.notify_fn(text))
+        except Exception as e:
+            print(f"[engine] ⚠️ delivery raised: {e}")
+            return False
+
+    def _send_outbox(self, state: dict, quiet: bool, now: datetime, now_monotonic: float,
+                     fresh: bool = False):
+        """Send what's waiting, oldest first, and keep whatever didn't go.
+
+        Every message leaves through here. A send that failed (the laptop just woke and
+        has no network yet) used to be dropped while her memory recorded it as said; now
+        it stays in engine_state.json and goes out on a later tick, marked late if it is.
+        """
+        outbox = state.get("undelivered", [])
+        if not outbox:
+            self._failures = 0
+            return
+        queue = state.setdefault("queued_notifications", [])
+        waiting = not fresh and now_monotonic < self._retry_at
+        kept, down = [], waiting
+        for item in outbox:
+            if quiet and not item.get("urgent"):
+                queue.append(item["text"])      # missed its hour; it joins the morning catch-up
+            elif down:
+                kept.append(item)
+            elif not self._send(_with_delay_note(item, now)):
+                down = True
+                kept.append(item)
+        if down and not waiting:
+            self._failures += 1
+            wait = RETRY_SECONDS[min(self._failures, len(RETRY_SECONDS)) - 1]
+            self._retry_at = now_monotonic + wait
+            print(f"[engine] delivery is down — {len(kept)} message(s) held, next try in {wait}s")
+        elif not down:
+            if self._failures:
+                print("[engine] delivery is back — held messages sent")
+            self._failures = 0
+        if len(kept) > OUTBOX_MAX:
+            print(f"[engine] ⚠️ dropping {len(kept) - OUTBOX_MAX} oldest unsent message(s)")
+            kept = kept[-OUTBOX_MAX:]
+        state["undelivered"] = kept
 
     def run_forever(self, stop_event: threading.Event = None):
         print(f"[engine] 🫀 Proactivity engine online — monitors: "
