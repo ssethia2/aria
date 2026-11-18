@@ -207,6 +207,26 @@ def reschedule(commitment_id, new_due_date, new_due_time=None):
     return description
 
 
+def restate(commitment_id, description):
+    """Re-word an open commitment and count it from now: a wait whose question has moved
+    on ("can we move it earlier?" became "does after the 30th work?"). Keeps the id and
+    history; the old wording goes in the event log. Returns the old description, or None."""
+    pred, sp = _scope()
+    conn = _conn()
+    row = conn.execute(
+        f"SELECT description FROM commitments WHERE id = ? AND status = 'open' AND {pred}",
+        [commitment_id, *sp]).fetchone()
+    if not row:
+        conn.close()
+        return None
+    conn.execute("UPDATE commitments SET description = ?, created_at = ? WHERE id = ?",
+                 (description, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), commitment_id))
+    conn.commit()
+    conn.close()
+    log_event(commitment_id, 'restated', f"was: {row[0]}")
+    return row[0]
+
+
 def snooze(commitment_id, until_date):
     """Silence chase/nudges for this commitment until `until_date` (stays open; still
     visible in lists). Returns the description, or None if no such open commitment."""

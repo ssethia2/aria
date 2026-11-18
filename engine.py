@@ -201,6 +201,21 @@ def already_tracked(what: str, open_items: list, who: str = ""):
     return None
 
 
+def waiting_on_person(who: str, open_items: list):
+    """The open wait on this person, if any: the same name, not just a shared first name
+    ("Sam Rivera" and "Sam Lee" are different people; "Sam Rivera (Acme)" is the same)."""
+    names = EmailDigestMonitor._words(who)
+    if not names:
+        return None
+    for c in open_items:
+        if c.get('kind') != 'waiting_on':
+            continue
+        theirs = EmailDigestMonitor._words(c.get('who') or '')
+        if theirs and (names <= theirs or theirs <= names):
+            return c
+    return None
+
+
 _QUOTE_HEADER = re.compile(r'^(-{2,}\s*(Original|Forwarded) Message|From: .+|Sent from my )', re.I)
 
 
@@ -217,6 +232,24 @@ def own_words(text: str) -> str:
         if not stripped.startswith(">"):
             out.append(line)
     return "\n".join(out).strip()
+
+
+_TRACKING_REF = re.compile(
+    r"\((?:tracking reply as|tracking as|tracking your promise as|watching for their answer as)"
+    r" #(\d+)[^)]*\)")
+
+
+def _as_of_morning(texts: list) -> list:
+    """Messages held overnight, with each "(tracking … as #N)" checked at send time. A
+    morning message once said "tracking reply as #247" hours after he had answered and
+    #247 was closed."""
+    try:
+        from skills.commitment_manager import get_open_commitments
+        open_ids = {str(c['id']) for c in get_open_commitments()}
+    except Exception:
+        return list(texts)
+    return [_TRACKING_REF.sub(lambda m: m.group(0) if m.group(1) in open_ids
+                              else "(handled since)", t) for t in texts]
 
 
 def tracking_tag(entry: dict) -> str:
@@ -437,7 +470,7 @@ Return [] if none — that should be the common case."""
     # Task verbs and filler that say nothing about WHICH commitment an email is about.
     _GENERIC_WORDS = {'the', 'and', 'for', 'with', 'from', 'about', 'through', 'out', 'get',
                       'buy', 'sell', 'fix', 'figure', 'finish', 'schedule', 'send', 'reply',
-                      'call', 'make', 'book', 'urgent'}
+                      'call', 'make', 'book', 'urgent', 'waiting', 'answer', 'whether'}
 
     @classmethod
     def _words(cls, text: str) -> set:
@@ -468,9 +501,14 @@ Return [] if none — that should be the common case."""
             self._track_from_sent(state, self._sent)
         except Exception as e:
             print(f"[engine] email-digest: sent-mail check failed: {e}")
+        sent_now = state.pop("alerts", [])
         alerts = [Notification(f"📩 {a['sender']} — “{a['subject']}”: {a['reason']}"
                                + (f" ({tracking_tag(a)})" if a.get("tracked") else ""))
-                  for a in state.pop("alerts", [])]
+                  for a in sent_now]
+        # The digest sees what was already said too: an alert is often the newest word on
+        # a matter ("you're through to the onsite"), and without it the digest wrote up the
+        # older notes on that matter as if nothing had happened since.
+        state.setdefault("pending_digest", []).extend(dict(a, alerted=True) for a in sent_now)
         return alerts + closed + self._maybe_flush_digest(state)
 
     SENT_PROMPT = """You read emails the user just SENT, to catch two things he would otherwise have
@@ -539,6 +577,24 @@ Return [] if none."""
                 continue
             who = (" ".join(str(item.get('who') or '').split())
                    or email['to'].split('<')[0].strip(' "') or email['to'])[:60]
+            if kind == 'waiting':
+                # What he is waiting on from someone is whatever he asked them LAST. An
+                # older wait on the same person is that question moved on: re-word it and
+                # count it from now, rather than letting it block the new one.
+                earlier = waiting_on_person(who, open_items)
+                if earlier:
+                    per_email[email['id']] = per_email.get(email['id'], 0) + 1
+                    commitment_manager.restate(earlier['id'], f"Waiting on {who}: {what}")
+                    _note("sent-mail", f"restated #{earlier['id']} ({earlier['description']!r})"
+                                       f" as waiting on {who} for {what!r}")
+                    earlier['description'] = f"Waiting on {who}: {what}"
+                    state.setdefault("pending_digest", []).append({
+                        "sender": f"You → {who}", "subject": email['subject'],
+                        "reason": f"You asked {who} for: {what}.",
+                        "tracked": f"#{earlier['id']}",
+                        "tag": f"watching for their answer as #{earlier['id']}",
+                        "at": now.strftime('%a %-I:%M %p')})
+                    continue
             dupe = already_tracked(what, open_items, who=who)
             if dupe:
                 _note("sent-mail", f"{kind} {what!r} not tracked: #{dupe['id']} already covers it")
@@ -806,12 +862,16 @@ Return [] if none."""
         if not items:
             return []
         state["pending_digest"] = []
+        if all(it.get("alerted") for it in items):
+            return []                        # everything in it went out as it arrived
         items = self._as_of_now(items)
         tracked = sum(1 for it in items if it.get("tracked", "").startswith("#"))
-        body = self._write_digest(items)
+        body = self._write_digest(items, now)
         if body is None:                     # no editor: one plain line per email
             lines = []
             for it in items:
+                if it.get("alerted"):
+                    continue                 # he has this one already
                 line = f"• {it['sender']} — “{it['subject']}”: {it['reason']}"
                 if it.get("tracked"):
                     line += f" ({tracking_tag(it)})"
@@ -859,10 +919,17 @@ Return [] if none."""
         return out
 
     DIGEST_PROMPT = """You are Aria, writing tonight's inbox digest for your user from the notes you
-made as each email arrived today. Notes are in arrival order and each was written without
-knowing what came after, so write the digest as things stand NOW:
+made as each email arrived since the last digest. Notes are in arrival order and each was
+written without knowing what came after, so write the digest as things stand NOW:
+- It is now {now}. A note's "at" is when it was written, and its "today", "tonight" or
+  "tomorrow" mean that day, not this one. Anything whose time has passed (a call, an
+  interview, an expiring link) is history: say what came of it if a later note shows that,
+  else leave it out. Never present a past event as upcoming.
 - One bullet per MATTER, not per email: several emails on one thread or about one thing
   become one bullet giving the latest state. A later email overrides an earlier note.
+- A note marked "alerted" was already sent to him when it arrived. It is often the newest
+  word on its matter, so use it to bring the other notes up to date; give it a bullet of
+  its own only if it still needs him.
 - "since" on a note means it was settled after the note was written (he replied, or the
   item was closed): say it is done in a few words, or leave the matter out if nothing
   about it is worth his attention any more. Never tell him to reply to something he has
@@ -882,23 +949,25 @@ His calendar, next 30 days:
 His open commitments:
 {commitments}
 
-Today's notes (JSON):
+Notes since the last digest (JSON):
 {notes}
 
 Return ONLY raw JSON (no markdown): {{"bullets": ["<sender or company: what it is and where it stands>", ...]}}"""
 
-    def _write_digest(self, items: list):
+    def _write_digest(self, items: list, now: datetime = None):
         """The digest body as bullets, or None to fall back to one line per email."""
         try:
             import situation
             from instructions import render_for_prompt
-            notes = [{k: it[k] for k in ("at", "sender", "subject", "reason", "since")
-                      if it.get(k)} for it in items]
+            now = now or self.now_fn()
+            notes = [{k: it[k] for k in ("at", "sender", "subject", "reason", "since",
+                                         "alerted") if it.get(k)} for it in items]
             for note, it in zip(notes, items):
                 if it.get("tracked"):
                     note["tracked"] = tracking_tag(it)
             verdict = _parse_llm_json(ask(
                 "digest", rules=render_for_prompt() or "(none)",
+                now=f"{now.strftime('%A %b')} {now.day}, {now.strftime('%-I:%M %p')}",
                 notes=json.dumps(notes, indent=2), **situation.in_motion()))
             bullets = [str(b).strip() for b in verdict.get("bullets", []) if str(b).strip()]
             # Every reply still being tracked must be named; otherwise don't trust it.
@@ -1851,7 +1920,8 @@ class ProactiveEngine:
         self._send_outbox(state, quiet, now, now_monotonic, fresh=bool(new_notifications))
 
         if not quiet and queue and not state["undelivered"]:
-            digest = "🌅 While you were away:\n\n" + "\n\n".join(f"• {t}" for t in queue)
+            digest = "🌅 While you were away:\n\n" + "\n\n".join(
+                f"• {t}" for t in _as_of_morning(queue))
             if self._send(digest):
                 state["queued_notifications"] = []
 

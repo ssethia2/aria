@@ -26,7 +26,11 @@ CACHE_SECONDS = 300     # chat can list commitments several times in a conversat
 GENERIC_WORDS = {'the', 'and', 'for', 'with', 'from', 'about', 'through', 'out', 'get',
                  'buy', 'sell', 'fix', 'figure', 'finish', 'schedule', 'send', 'reply',
                  'call', 'make', 'book', 'urgent', 'email', 'follow', 'check', 'back',
-                 'his', 'her', 'their', 'your', 'that', 'this'}
+                 'his', 'her', 'their', 'your', 'that', 'this',
+                 # How a wait is worded ("answer on whether it can be moved 15 minutes
+                 # earlier"): searching mail on these finds newsletters, not the person.
+                 'waiting', 'answer', 'whether', 'update', 'updates', 'details', 'any',
+                 'more', 'other', 'new', 'minutes', 'earlier', 'later', 'moved'}
 
 _cache = {}
 
@@ -68,17 +72,32 @@ def _batch(service, requests: dict) -> dict:
     return got
 
 
-def _mail_for(service, terms_by_item: dict) -> dict:
+def _mail_for(service, terms_by_item: dict, people: dict = None) -> dict:
     """{item id: recent messages, sent or received, mentioning any of its terms}: the best
-    matches, oldest first. Two round trips however many items there are."""
+    matches, oldest first. Two round trips however many items there are.
+
+    An item with a person also gets that person's own mail, searched separately. One search
+    on name and topic words together returns the ten newest matches, and a busy inbox's
+    newsletters crowded out the person's replies: she judged a "waiting on" a recruiter from
+    his own sent mail alone, two replies from the recruiter later, and kept it open."""
+    people = people or {}
     api = service.users().messages()
-    found = _batch(service, {
-        str(cid): api.list(userId='me', maxResults=10, q=(
-            f'newer_than:{WINDOW_DAYS}d {{{" ".join(terms)}}} '
-            f'-subject:"Daily Assistant Summary" -category:promotions'))
-        for cid, terms in terms_by_item.items()})
-    ids = {cid: [m['id'] for m in found.get(str(cid), {}).get('messages', [])]
-           for cid in terms_by_item}
+    tail = f'-subject:"Daily Assistant Summary" -category:promotions'
+    queries = {str(cid): api.list(userId='me', maxResults=10, q=(
+        f'newer_than:{WINDOW_DAYS}d {{{" ".join(terms)}}} {tail}'))
+        for cid, terms in terms_by_item.items()}
+    for cid, names in people.items():
+        if cid in terms_by_item and names:
+            who = " ".join(f"from:{n} to:{n}" for n in names)
+            queries[f"{cid}:who"] = api.list(userId='me', maxResults=10, q=(
+                f'newer_than:{WINDOW_DAYS}d {{{who}}} {tail}'))
+    found = _batch(service, queries)
+    ids = {}
+    for cid in terms_by_item:
+        mids = [m['id'] for m in found.get(f"{cid}:who", {}).get('messages', [])]
+        mids += [m['id'] for m in found.get(str(cid), {}).get('messages', [])
+                 if m['id'] not in mids]
+        ids[cid] = mids
     wanted = sorted({mid for mids in ids.values() for mid in mids})
     msgs = _batch(service, {mid: api.get(userId='me', id=mid, format='metadata',
                                          metadataHeaders=['From', 'To', 'Subject'])
@@ -98,6 +117,8 @@ def _mail_for(service, terms_by_item: dict) -> dict:
                      'ts': int(msg.get('internalDate', 0)) / 1000}
             text = words(" ".join((entry['who'], entry['subject'], entry['snippet'])))
             entry['hits'] = len(text & set(terms))
+            if set(people.get(cid) or ()) & words(entry['who']):
+                entry['hits'] += 2          # the person's own mail outranks a topic match
             mail.append(entry)
         mail.sort(key=lambda e: (-e['hits'], -e['ts']))
         out[cid] = sorted(mail[:PER_ITEM], key=lambda e: e['ts'])
@@ -129,8 +150,11 @@ def around(commitments: list) -> dict:
         from skills.email_manager import get_gmail_service
         service = None if email_backend.using_app_password() else get_gmail_service()
         terms = {c['id']: search_terms(c, items) for c in items}
+        people = {c['id']: sorted(words(c.get('who') or ''), key=lambda w: (-len(w), w))[:2]
+                  for c in items}
         if service:
-            out["mail"] = _mail_for(service, {cid: t for cid, t in terms.items() if t})
+            out["mail"] = _mail_for(service, {cid: t for cid, t in terms.items() if t},
+                                    people)
     except Exception as e:
         print(f"[situation] mail unavailable: {e}")
     _cache.clear()

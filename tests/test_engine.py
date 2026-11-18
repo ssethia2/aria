@@ -79,7 +79,7 @@ class TempStateMixin:
         # The digest's send-time pass reads his commitments, mail and a model: off by
         # default, exercised in TestDigestAsOfNow.
         for name, value in (('_as_of_now', staticmethod(lambda items: items)),
-                            ('_write_digest', lambda self, items: None)):
+                            ('_write_digest', lambda self, items, now=None: None)):
             p = patch.object(engine.EmailDigestMonitor, name, value)
             p.start()
             self.addCleanup(p.stop)
@@ -733,7 +733,8 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
             rules=["Alert immediately when an interview invite arrives."])
         self.assertEqual(len(out), 1)
         self.assertIn("Acme Interview Request", out[0].text)
-        self.assertNotIn("pending_digest", state)
+        # It reaches the digest only as context, marked as already sent.
+        self.assertEqual([n.get("alerted") for n in state["pending_digest"]], [True])
 
     # --- closing commitments that email proves done ---
 

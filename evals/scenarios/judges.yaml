@@ -271,6 +271,7 @@
   judge: digest
   why: "The digest listed three emails about one interview, and asked for a reply on a thread he had answered that afternoon."
   fields:
+    now: "{{day:today}}, 6:00 PM"
     calendar: "{{day:today+3}}, 2:00 PM — Acme: technical interview"
     notes:
       - {at: "{{wd:today}} 9:10 AM", sender: "Sam Rivera <sam@acme.example>", subject: "Next steps with Acme", reason: "Recruiter asks you to pick an interview slot; may need a reply.", since: "you've replied since"}
@@ -281,6 +282,23 @@
     count: {of: bullets, min: 2, max: 2}
     text_matches: ["tracking reply as #22"]
     judge: "Acme is ONE bullet that says the technical interview is confirmed or set; it does not ask him to reply or to book. The other bullet is Kim's dinner question and says it needs his reply."
+
+- id: digest-does-not-replay-yesterdays-notes-as-upcoming
+  judge: digest
+  why: "Notes written the evening before carried 'your interview is today at 10:30', and the morning's 'you're through to the onsite' went out as an alert, so the digest told him to get ready for an interview he had already passed."
+  fields:
+    now: "{{day:today}}, 6:00 PM"
+    calendar: "(nothing)"
+    notes:
+      - {at: "{{wd:today-1}} 7:30 PM", sender: "Sam Rivera <sam@acme.example>", subject: "Updated invitation: Acme technical interview", reason: "Acme moved your technical interview 15 minutes earlier, to 9:00 PM tonight. Accept the updated invite."}
+      - {at: "{{wd:today-1}} 8:00 PM", sender: "Acme Recruiting <noreply@acme.example>", subject: "Reminder: your interview today", reason: "Automated reminder that your Acme interview is today at 9:00 PM, with the video link."}
+      - {at: "{{wd:today-1}} 9:10 PM", sender: "Acme Recruiting <noreply@acme.example>", subject: "Your coding practical", reason: "The coding practical for your interview; the download link expires in 3 hours."}
+      - {at: "{{wd:today}} 12:40 AM", sender: "Sam Rivera <sam@acme.example>", subject: "Acme next steps", reason: "You passed the technical interview. Sam is moving you to an in-person onsite and asks for your availability.", alerted: true, since: "you've replied since"}
+      - {at: "{{wd:today}} 2:15 PM", sender: "Kim Lee <kim@example.com>", subject: "Dinner on Saturday?", reason: "Kim asks if you're free Saturday evening; needs a reply.", tracked: "tracking reply as #22"}
+  expect:
+    text_matches: ["tracking reply as #22"]
+    text_not_matches: ["(?i)accept the (updated )?invite", "(?i)interview (is )?today", "(?i)9:00 PM tonight"]
+    judge: "Nothing presents the technical interview, its reminder or the practical's download link as still ahead. If Acme appears at all, it reflects that he passed and is moving to an onsite he has already answered about. Kim's dinner question is there and needs his reply."
 
 # ---- heads-ups before something on his calendar --------------------------------------------
 

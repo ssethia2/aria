@@ -68,6 +68,41 @@ class TestAround(unittest.TestCase):
         self.assertEqual(mail[1]["direction"], "sent")
         self.assertIn("newer_than:21d {acme}", msgs.list.call_args.kwargs["q"])
 
+    def test_the_persons_own_mail_is_not_crowded_out_by_topic_matches(self):
+        """Ten newsletters matching "minutes" used to fill the only search, so the
+        recruiter's two replies never reached the judge."""
+        service = MagicMock()
+        msgs = service.users.return_value.messages.return_value
+        payloads = {f"n{i}": {"labelIds": ["INBOX"], "internalDate": str(9_000_000 + i),
+                              "snippet": "quotes in minutes",
+                              "payload": {"headers": [{"name": "From", "value": "News <n@news.example>"},
+                                                      {"name": "Subject", "value": "Save in minutes"}]}}
+                    for i in range(10)}
+        payloads["sam"] = {"labelIds": ["INBOX"], "internalDate": "5000000",
+                           "snippet": "You're through to the onsite",
+                           "payload": {"headers": [{"name": "From", "value": "Sam Rivera <sam@acme.example>"},
+                                                   {"name": "Subject", "value": "Acme next steps"}]}}
+        lists = {"7": {"messages": [{"id": f"n{i}"} for i in range(10)]},
+                 "7:who": {"messages": [{"id": "sam"}]}}
+
+        def new_batch(callback):
+            batch, queued = MagicMock(), []
+            batch.add.side_effect = lambda req, request_id: queued.append(request_id)
+            batch.execute.side_effect = lambda: [
+                callback(k, lists.get(k) or payloads[k], None) for k in queued]
+            return batch
+        service.new_batch_http_request.side_effect = new_batch
+        mail = situation._mail_for(service, {7: ["rivera", "minutes"]}, {7: ["rivera", "sam"]})[7]
+        self.assertIn("sam", [m["id"] for m in mail])
+        queries = [c.kwargs["q"] for c in msgs.list.call_args_list]
+        self.assertTrue(any("from:rivera to:rivera from:sam to:sam" in q for q in queries))
+
+    def test_wording_of_a_wait_is_not_searched_on(self):
+        c = item(1, "Waiting on Sam Rivera: answer on whether it can be moved 15 minutes earlier",
+                 who="Sam Rivera")
+        terms = situation.search_terms(c, [c])
+        self.assertFalse({"answer", "whether", "minutes", "earlier", "waiting"} & set(terms))
+
 
 class TestMailContext(unittest.TestCase):
     def test_each_email_gets_its_thread_memory_and_person_notes(self):

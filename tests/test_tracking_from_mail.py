@@ -159,6 +159,26 @@ class TestTrackFromSent(StoreMixin, unittest.TestCase):
                         {"email_id": "s1", "type": "gift", "what": "x", "quote": "send you"}, "text"])
         self.assertEqual(cm.get_open_commitments(), [])
 
+    def test_a_new_ask_of_the_same_person_restates_the_old_wait(self):
+        """He asked to move the interview earlier; it happened; then he asked whether a
+        date after the 30th works. The old wait used to block the new one as a duplicate."""
+        old = cm.add("Waiting on Kim Lee: answer on whether the call can move earlier",
+                     kind="waiting_on", who="Kim Lee", source="sent")
+        state, _ = self.run_judge([{"email_id": "s1", "type": "waiting",
+                                    "what": "confirmation of the hotel dates", "who": "Kim Lee",
+                                    "due": None, "quote": "could you confirm the hotel dates?"}])
+        (wait,) = cm.get_open_commitments()
+        self.assertEqual(wait["id"], old)
+        self.assertEqual(wait["description"], "Waiting on Kim Lee: confirmation of the hotel dates")
+        self.assertEqual(cm.events_for(old)[-1]["event"], "restated")
+        self.assertIn(f"watching for their answer as #{old}", state["pending_digest"][0]["tag"])
+
+    def test_a_wait_on_someone_else_with_the_same_first_name_is_left_alone(self):
+        cm.add("Waiting on Kim Park: the signed lease", kind="waiting_on", who="Kim Park")
+        self.run_judge([{"email_id": "s1", "type": "waiting", "what": "confirmation of the hotel dates",
+                         "who": "Kim Lee", "due": None, "quote": "could you confirm the hotel dates?"}])
+        self.assertEqual(sorted(c["who"] for c in cm.get_open_commitments()), ["Kim Lee", "Kim Park"])
+
     def test_at_most_two_items_from_one_email(self):
         self.run_judge([{"email_id": "s1", "type": "promise", "what": w, "who": "Kim Lee",
                          "due": None, "quote": "send you the full itinerary"}
@@ -209,6 +229,46 @@ class TestWaitingOn(StoreMixin, unittest.TestCase):
         self.assertIn("Renew passport", own)
         self.assertNotIn("signed contract", own)
         self.assertIn("signed contract", theirs)
+
+
+class TestNewestWordReachesTheDigest(StoreMixin, unittest.TestCase):
+    def test_an_alert_also_goes_to_the_digest_marked_as_already_sent(self):
+        mon = EmailDigestMonitor(now_fn=lambda: NOW)
+        state = {"alerts": [{"sender": "Sam Rivera", "subject": "Acme next steps",
+                             "reason": "You're through to the onsite."}]}
+        with patch.object(mon, "_screen_new_mail", return_value=[]), \
+             patch.object(mon, "_close_proven", return_value=[]), \
+             patch.object(mon, "_track_from_sent"), \
+             patch.object(mon, "_maybe_flush_digest", return_value=[]):
+            out = mon.check(state)
+        self.assertIn("through to the onsite", out[0].text)
+        self.assertEqual(state["pending_digest"][0]["alerted"], True)
+
+    def test_the_digest_knows_the_time_and_skips_if_all_was_already_sent(self):
+        mon = EmailDigestMonitor(now_fn=lambda: NOW.replace(hour=19))
+        state = {"pending_digest": [{"sender": "Sam", "subject": "s", "reason": "r", "alerted": True}]}
+        self.assertEqual(mon._maybe_flush_digest(dict(state)), [])
+        state["pending_digest"].append({"sender": "Kim", "subject": "Dinner", "reason": "asks about Sat",
+                                        "at": "Tue 7:31 PM"})
+        with patch.object(EmailDigestMonitor, "_as_of_now", side_effect=lambda items: items), \
+             patch("situation.in_motion", return_value={"calendar": "", "commitments": ""}), \
+             patch("instructions.render_for_prompt", return_value=""), \
+             patch.object(engine, "ask", return_value='{"bullets": ["Kim: dinner Saturday"]}') as ask:
+            (digest,) = mon._maybe_flush_digest(state)
+        self.assertIn("Kim: dinner Saturday", digest.text)
+        self.assertIn(f"{NOW.day}, 7:", ask.call_args.kwargs["now"])
+        self.assertIn('"alerted": true', ask.call_args.kwargs["notes"])
+
+
+class TestMorningMessages(StoreMixin, unittest.TestCase):
+    def test_a_tracking_tag_for_something_since_closed_is_corrected(self):
+        open_id = cm.add("Reply to Kim", kind="reply_owed")
+        done_id = cm.add("Reply to Sam", kind="reply_owed")
+        cm.complete(done_id)
+        out = engine._as_of_morning([f"📩 Sam — next steps (tracking reply as #{done_id})",
+                                     f"📩 Kim — dinner (tracking reply as #{open_id})"])
+        self.assertEqual(out[0], "📩 Sam — next steps (handled since)")
+        self.assertIn(f"#{open_id}", out[1])
 
 
 class TestDigestTags(unittest.TestCase):
