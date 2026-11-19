@@ -77,9 +77,11 @@ class TempStateMixin:
         self._known.start()
         self.addCleanup(self._known.stop)
         # The digest's send-time pass reads his commitments, mail and a model: off by
-        # default, exercised in TestDigestAsOfNow.
+        # default, exercised in TestDigestAsOfNow. Folding mail into the matters is one
+        # more model call per tick: off here, exercised in test_matters.
         for name, value in (('_as_of_now', staticmethod(lambda items: items)),
-                            ('_write_digest', lambda self, items, now=None: None)):
+                            ('_write_digest', lambda self, items, now=None: None),
+                            ('_update_matters', lambda self, inbound, sent: None)):
             p = patch.object(engine.EmailDigestMonitor, name, value)
             p.start()
             self.addCleanup(p.stop)

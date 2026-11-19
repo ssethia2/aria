@@ -498,3 +498,90 @@
     text_matches: ["Sam"]
     judge: "The message says Sam hasn't answered about the start date and offers to draft a follow-up (or a nudge) to Sam. It does not tell him that HE owes Sam anything."
 
+
+# ---- the matters in motion (matters.py) --------------------------------------------------
+
+- id: matters-news-continues-the-matter-it-belongs-to
+  judge: matters
+  why: "Each judge re-read raw mail and went stale its own way. The matter is the one place that says where a thing stands, so news must land on the matter it continues, not start a second one."
+  fields:
+    matters: |
+      M3 Acme interview process
+         where it stands: technical interview done {{day:today-1}}; waiting to hear
+         latest: {{day:today-1}}: he had the technical interview with Jo Park
+         next: Acme says how it went (their move)
+         with: Sam Rivera (Acme recruiter), Jo Park · his items: #41 · updated {{day:today-1}}
+      M5 Porto trip (Dec 3)
+         where it stands: flights booked, hotel not yet
+         next: book the hotel (his move)
+         with: TAP · updated {{day:today-4}}
+    commitments: |
+      #41 Waiting on Sam Rivera: answer on how the technical interview went
+      #44 Book a hotel in Porto
+    emails:
+      - {id: "m1", direction: received, from: "Sam Rivera <sam@acme.example>", subject: "Acme next steps", when: "{{day:today}}, 12:40 AM", text: "Hi! Great news: you passed the technical round. The next step is an in-person onsite at our office (about 2 hours, coding plus a chat with our CTO). Could you send me your availability for the coming weeks?"}
+  expect:
+    count: 1
+    items:
+      - where: {matter: 3}
+        has: {move: his, next_date: null}
+    judge: "The one change is to M3 (not a new matter): it says he passed the technical round and the onsite is next, and that sending his availability is his next step. Nothing about the Porto trip changes."
+
+- id: matters-his-reply-makes-it-their-move
+  judge: matters
+  why: "A wait on someone is whatever he asked them last; once he has answered, the next move is theirs, and nothing should nudge him about it."
+  fields:
+    matters: |
+      M3 Acme interview process
+         where it stands: passed the technical round; in-person onsite next
+         latest: {{day:today-1}}: Sam asked for his availability for the onsite
+         next: send Sam his availability (his move)
+         with: Sam Rivera (Acme recruiter) · updated {{day:today-1}}
+    emails:
+      - {id: "s1", direction: sent, to: "Sam Rivera <sam@acme.example>", subject: "Re: Acme next steps", when: "{{day:today}}, 9:15 AM", text: "Thanks Sam, that's great to hear! I'm travelling until December 30, but I can come in to the office any day after that."}
+  expect:
+    count: 1
+    items:
+      - where: {matter: 3}
+        has: {move: theirs}
+    judge: "M3 now says he has replied that he can come in after December 30 and that Sam (or Acme) proposing onsite dates is the next step: their move, not his."
+
+- id: matters-someone-elses-booking-is-theirs
+  judge: matters
+  why: "She pushed flight alerts and a bank call at him for a booking and an account that were someone else's. Whose a matter is decides whether it is ever his to be nudged about."
+  fields:
+    emails:
+      - {id: "b1", direction: received, from: "TAP Air Portugal <bookings@tap.example>", subject: "Fwd: Your booking confirmation QX12AB", when: "{{day:today}}, 3:10 PM", text: "Booking QX12AB. Passenger: KIM LEE. TP 202 Lisbon (LIS) to Porto (OPO), departing {{longdate:today+9}} at 7:40 AM. Seat 14C.", you_remember: "Kim Lee is his sister. He booked her flight so she can visit him in Porto."}
+  expect:
+    count: 1
+    items:
+      - where: {matter: new}
+        has: {owner: {contains: Kim}}
+    judge: "The new matter is Kim's trip or flight, with Kim as the owner (not him)."
+
+- id: matters-noise-changes-nothing
+  judge: matters
+  why: "A one-time code or a receipt with nothing pending is not something in motion; a picture cluttered with them hides what is."
+  fields:
+    matters: |
+      M5 Porto trip (Dec 3)
+         where it stands: flights booked, hotel not yet
+         next: book the hotel (his move)
+         with: TAP · updated {{day:today-4}}
+    emails:
+      - {id: "n1", direction: received, from: "Northwind Bank <alerts@northwind.example>", subject: "Your verification code", when: "{{day:today}}, 9:02 AM", text: "Your one-time code is 482913. It expires in 10 minutes. If you didn't request it, ignore this email."}
+      - {id: "n2", direction: received, from: "Blue Door Coffee <receipts@bluedoor.example>", subject: "Your receipt", when: "{{day:today}}, 9:40 AM", text: "Thanks for stopping by! Flat white $4.50. Paid by card ending 1234."}
+  expect:
+    count: 0
+
+- id: matters-a-stated-date-is-quoted-not-guessed
+  judge: matters
+  why: "She once presented made-up dates as real. A matter's next date stands only with the words that state it."
+  fields:
+    emails:
+      - {id: "d1", direction: received, from: "Lisbon Dental <front.desk@lisbondental.example>", subject: "Appointment confirmed", when: "{{day:today}}, 11:00 AM", text: "Dear patient, your cleaning appointment is confirmed for {{longdate:today+6}} at 9:30 AM with Dr. Costa. Please arrive 10 minutes early."}
+  expect:
+    count: 1
+    items:
+      - where: {matter: new}
+        has: {next_date: "{{today+6}}", date_quote: {contains: "{{monthday:today+6}}"}}

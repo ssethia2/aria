@@ -490,6 +490,7 @@ Return [] if none — that should be the common case."""
 
     def check(self, state: dict) -> list:
         since = state.get("last_check_ts", time.time() - self.interval_seconds)
+        self._motion = None
         inbound = self._screen_new_mail(state) or []
         self._sent = []
         try:
@@ -501,6 +502,10 @@ Return [] if none — that should be the common case."""
             self._track_from_sent(state, self._sent)
         except Exception as e:
             print(f"[engine] email-digest: sent-mail check failed: {e}")
+        try:
+            self._update_matters(inbound, self._sent)
+        except Exception as e:  # the picture lags one email; nothing else waits on it
+            print(f"[engine] email-digest: matters update failed: {e}")
         sent_now = state.pop("alerts", [])
         alerts = [Notification(f"📩 {a['sender']} — “{a['subject']}”: {a['reason']}"
                                + (f" ({tracking_tag(a)})" if a.get("tracked") else ""))
@@ -618,6 +623,35 @@ Return [] if none."""
             state.setdefault("pending_digest", []).append({
                 "sender": f"You → {who}", "subject": email['subject'], "reason": reason,
                 "tracked": f"#{cid}", "tag": tag, "at": now.strftime('%a %-I:%M %p')})
+
+    def _update_matters(self, inbound: list, sent: list):
+        """Fold this tick's mail, both ways, into the matters (see matters.py): the one
+        place that says where each thing in his life stands, which the other judges read."""
+        if not inbound and not sent:
+            return
+        import matters
+        import situation
+        from instructions import render_for_prompt
+        from skills import commitment_manager
+        now = self.now_fn()
+        at = now.strftime('%a %b %-d, %-I:%M %p')
+        emails = [{'id': e['id'], 'direction': 'received', 'from': e.get('sender', ''),
+                   'subject': e.get('subject', ''), 'when': at,
+                   'text': (e.get('text') or e.get('snippet') or '')[:MAIL_TEXT_CHARS],
+                   **{k: e[k] for k in ('earlier_in_thread', 'you_remember', 'sender_notes')
+                      if e.get(k)}} for e in inbound]
+        emails += [{'id': e['id'], 'direction': 'sent', 'to': e.get('to', ''),
+                    'subject': e.get('subject', ''), 'when': at,
+                    'text': (e.get('text') or e.get('snippet') or '')[:MAIL_TEXT_CHARS]}
+                   for e in sent]
+        motion = getattr(self, '_motion', None) or situation.in_motion()
+        items = commitment_manager.get_open_commitments()
+        verdict = _parse_llm_json(ask(
+            "matters", today=now.strftime('%A %Y-%m-%d'),
+            rules=render_for_prompt() or "(none)", matters=matters.render(),
+            commitments="\n".join(commitment_manager.format_line(c) for c in items) or "(none)",
+            calendar=motion["calendar"], emails=json.dumps(emails, indent=2, ensure_ascii=False)))
+        matters.apply(verdict, emails, {c['id'] for c in items}, now, motion["calendar"])
 
     def _new_sent_mail(self, state: dict, since: float) -> list:
         """Mail the user sent since the last tick ("I just completed the assessment" is
@@ -753,7 +787,7 @@ Return [] if none."""
         import situation
         threads = {e['id']: e.get('thread_id') for e in emails}
         situation.enrich_mail(emails, service if not email_backend.using_app_password() else None)
-        motion = situation.in_motion()
+        motion = self._motion = situation.in_motion()
         print(f"[engine] email-digest: screening {len(emails)} new email(s)")
         # His standing rules ("never track apartment emails as replies owed", "alert me right
         # away about interview invites") used to reach only the chat agent, so the screener
@@ -1837,6 +1871,8 @@ class NetflixMonitor(Monitor):
             f"📺 A Netflix household-update email arrived but I couldn't finish it:\n{result}")]
 
 
+import matters as _matters  # noqa: E402  (its prompt; it imports nothing from here at load)
+
 # Every background judge: its prompt and the tier it runs on. `ask` reads this, and so do
 # the judge evals (evals/scenarios/judges.yaml) and `python3 -m evals --replay`.
 JUDGES = {
@@ -1850,6 +1886,7 @@ JUDGES = {
     "insight": (InsightMonitor.PROMPT, "light"),
     "reflection": (ReflectionMonitor.PROMPT, "light"),
     "weekly-reflection": (WeeklyReflectionMonitor.PROMPT, "light"),
+    "matters": (_matters.UPDATE_PROMPT, "light"),
 }
 
 
