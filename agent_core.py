@@ -18,6 +18,7 @@ model call via dynamic_prompt middleware — never stored in checkpointed state.
 import os
 import sqlite3
 from datetime import datetime
+from typing import Union
 
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -104,6 +105,86 @@ def explain_decision(about: str) -> str:
 
 
 @tool
+def where_things_stand() -> str:
+    """Everything in motion in his life right now, one matter each (an interview process, a
+    trip, a visa case, a friend's booking he is helping with): where it stands, the newest
+    step, the next step and whose move it is, and which of his commitments belong to it.
+    Kept current from every email he gets and sends. Use it when he asks what's going on,
+    where things stand, or what his move is anywhere, and before you tell him the state of
+    several things at once. Each matter's number (M4) is what `update_matter` takes.
+    READ-ONLY.
+    """
+    import matters
+    return ("What is in motion (kept current from his mail; a matter marked as someone "
+            "else's is theirs):\n\n" + matters.render())
+
+
+@tool
+def update_matter(matter: Union[int, str] = None, title: str = None, owner: str = None,
+                  stage: str = None, latest: str = None, next_step: str = None,
+                  move: str = None, next_date_iso: str = None, close: bool = False,
+                  reason: str = None) -> str:
+    """Correct or update one of the matters in motion when he tells you something about it:
+    where it stands ("I passed", "the onsite is Jan 5", "I sent them the form"), or whose it
+    is ("that flight is Kim's", "I don't have a Northwind account"). His word beats what his
+    mail suggested, so do it in the same turn. Pass only what changes.
+
+    Args:
+        matter: its number from `where_things_stand` or `look_up`, e.g. 'M4'. Omit it,
+            with a title, to start a new matter he tells you about.
+        title: what it is, e.g. 'Acme interview process' (to start one, or rename it).
+        owner: whose it is when it isn't his, e.g. 'Kim'; 'his' makes it his again.
+        stage: where it stands now, in a few words.
+        latest: the newest thing that happened, starting with its day.
+        next_step: what happens next, and who does it.
+        move: 'his', 'theirs' or 'none'.
+        next_date_iso: YYYY-MM-DD of the next step, only when he said it.
+        close: True when it's over, or when it was never his concern at all.
+        reason: why it's closing, in his words.
+    """
+    import matters
+    fields = {k: " ".join(v.split()) for k, v in (("title", title), ("stage", stage),
+                                                   ("latest", latest),
+                                                   ("next_step", next_step)) if v}
+    if move is not None:
+        if move not in matters.MOVES:
+            return "Error: move must be 'his', 'theirs' or 'none'."
+        fields["move"] = move
+    if next_date_iso:
+        try:
+            datetime.strptime(next_date_iso, '%Y-%m-%d')
+        except ValueError:
+            return f"Error: next_date_iso must be YYYY-MM-DD, got {next_date_iso}."
+        fields["next_date"] = next_date_iso
+    if owner is not None:
+        fields["owner"] = None if matters._is_him(owner) else " ".join(owner.split())[:40]
+    if matter is None:
+        if not fields.get("title"):
+            return "Give the matter's number, or a title to start a new one."
+        if close:
+            return "Nothing to close: that matter doesn't exist yet."
+        mid = matters.create(fields, source="chat")
+        return f"Started M{mid}: {fields['title']}."
+    try:
+        m = matters.get(int(str(matter).strip().lstrip("Mm#")))
+    except ValueError:
+        m = None
+    if not m:
+        return f"No matter M{matter}. Call `where_things_stand` for the numbers."
+    if m["status"] != "open":
+        matters.reopen(m["id"], source="chat")
+    changed = matters.update(m["id"], fields, source="chat") if fields else {}
+    out = f"M{m['id']} ({m['title']})"
+    if changed:
+        out += ": " + "; ".join(f"{k} → {v if v is not None else 'his'}"
+                                for k, v in changed.items())
+    if close:
+        matters.close(m["id"], reason or "he says it's over", source="chat")
+        out += f" — closed ({reason or 'he says it is over'})"
+    return out + ("." if changed or close else ": nothing changed.")
+
+
+@tool
 def read_and_summarize_emails() -> str:
     """Use this tool to read the user's recent emails, categorize them, and delete junk."""
     classifications, raw_emails = run_email_summary()
@@ -139,6 +220,8 @@ def build_tools(guest=False):
         search_memory,
         look_up,
         explain_decision,
+        where_things_stand,
+        update_matter,
         read_and_summarize_emails,
         read_email_thread,
         generate_morning_news,
@@ -254,6 +337,16 @@ with `add_commitment` so it is firm.
 WAITING ON OTHERS: when he says he's waiting on someone (a reply, a document, a decision),
 track it with kind='waiting_on' and `who`. It is their move: never tell him to do it; you
 watch his mail for their answer and offer a follow-up if they go quiet.
+MATTERS: your background side keeps a picture of what is in motion in his life, one matter
+per thing (an interview process, a trip, a visa case, a friend's booking), each saying where
+it stands, the next step and whose move it is, kept current from his mail and read by every
+background judgment you make. `where_things_stand` shows it all; `look_up` includes the
+matter for a topic. When he tells you where something stands or whose it is ("I passed",
+"the onsite is Jan 5", "that flight is Kim's", "I don't have a Northwind account"), fix the
+matter with `update_matter` in the same turn, along with whatever else it changes (a
+commitment to drop, a memory to save): his word beats what the mail suggested, and a wrong
+matter makes every later nudge and digest wrong. A matter marked as someone else's is
+theirs: never present it as his.
 DATES ARE FACTS, NOT ESTIMATES: if an item has no due_date, say it's undated — NEVER invent,
 estimate, or pad a deadline ("making up due dates" destroys trust in every real one). A
 reply_owed has a date only when the email itself stated one ("let us know by Friday"). A

@@ -185,3 +185,47 @@ class TestEngineFoldsEachTicksMail(Store):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestChatCorrectsTheMatters(Store):
+    def call(self, **kw):
+        import agent_core
+        return agent_core.update_matter.invoke(kw)
+
+    def test_his_word_sets_whose_it_is_and_his_makes_it_his_again(self):
+        mid = matters.create({"title": "TAP flight TP 202"}, now=NOW)
+        self.assertIn("owner → Kim", self.call(matter=mid, owner="Kim"))
+        self.assertEqual(matters.get(mid)["owner"], "Kim")
+        self.call(matter=mid, owner="his")
+        self.assertIsNone(matters.get(mid)["owner"])
+
+    def test_not_his_concern_at_all_closes_it_with_his_reason(self):
+        mid = matters.create({"title": "Northwind card KYC"}, now=NOW)
+        out = self.call(matter=f"M{mid}", close=True, reason="he has no Northwind account")
+        self.assertIn("closed", out)
+        self.assertEqual(matters.open_matters(), [])
+        self.assertIn("no Northwind account", matters.events(mid)[-1]["detail"])
+
+    def test_news_he_gives_updates_and_a_new_matter_can_be_started(self):
+        mid = matters.create({"title": "Acme interview process", "move": "theirs"}, now=NOW)
+        self.call(matter=mid, stage="passed technical; onsite next", move="his",
+                  next_date_iso="2027-01-05")
+        m = matters.get(mid)
+        self.assertEqual((m["move"], m["next_date"]), ("his", "2027-01-05"))
+        self.assertIn("Started M", self.call(title="Porto apartment search"))
+
+    def test_bad_input_is_refused_plainly(self):
+        self.assertIn("Error", self.call(matter=1, move="maybe"))
+        self.assertIn("Error", self.call(matter=1, next_date_iso="Jan 5"))
+        self.assertIn("No matter M42", self.call(matter=42, stage="x"))
+        self.assertIn("number, or a title", self.call(stage="x"))
+
+    def test_look_up_includes_the_matter(self):
+        import situation
+        matters.create({"title": "Acme interview process", "people": "Sam Rivera"}, now=NOW)
+        with patch("memory.recall", return_value=""), \
+             patch("skills.email_manager.get_gmail_service", return_value=None), \
+             patch("skills.google_calendar.fetch_events", return_value=[]), \
+             patch("people._load", return_value=[]):
+            out = situation.know("Acme")
+        self.assertIn("M1 Acme interview process", out)

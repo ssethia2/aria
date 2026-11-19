@@ -38,7 +38,7 @@ REAL_TOOLS = frozenset({
     "remember_person", "get_person", "list_people",
     "add_standing_instruction", "update_standing_instruction", "remove_standing_instruction",
     "add_to_grocery_list", "view_grocery_list", "remove_from_grocery_list",
-    "clear_grocery_list",
+    "clear_grocery_list", "where_things_stand", "update_matter",
 })
 
 _HA_NOT_CONNECTED = ("Smart home isn't connected yet — set HA_URL and HA_TOKEN in .env "
@@ -253,7 +253,7 @@ class Sandbox:
             out = run(n, call_args, args, kwargs)
             # The judge sees what each tool returned: "report only what the calendar said"
             # can't be graded from the call alone (it failed a correct reply 1 run in 3).
-            record["output"] = str(out)[:800]
+            record["output"] = str(out)[:2500]
             return out
 
         return t.model_copy(update={"func": wrapper})

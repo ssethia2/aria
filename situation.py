@@ -383,6 +383,12 @@ def know(about: str) -> str:
                   for c in recently_closed(40) if hit(c['description'])][:6]
         return "\n".join(lines)
 
+    def from_matters():
+        import matters
+        return "\n".join(matters.render_one(m) for m in
+                         matters.open_matters() + matters.recently_closed()
+                         if hit(f"{m['title']} {m.get('people') or ''} {m.get('owner') or ''}"))
+
     def from_people():
         import people
         return "\n".join("    " + ", ".join(f"{k}: {v}" for k, v in p.items() if v)
@@ -394,6 +400,8 @@ def know(about: str) -> str:
     section(f"Mail, last {KNOW_MAIL_DAYS} days, oldest first", from_mail)
     section(f"Calendar, past {KNOW_BACK_DAYS} days to {KNOW_AHEAD_DAYS} days ahead",
             from_calendar)
+    section("Where it stands (the matter, kept current from his mail; his word in chat "
+            "overrides it, so fix it with update_matter when he corrects it)", from_matters)
     section("Commitments", from_commitments)
     section("Your notes on people", from_people)
     return (f"Everything on {about!r}. These are parts of one picture: read them together, "

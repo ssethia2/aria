@@ -1,0 +1,45 @@
+# The matters in motion (matters.py), from the chat side: he corrects them, and asks where
+# things stand. The background judges that read them are in judges.yaml.
+
+- id: his-correction-goes-on-the-matter
+  why: "She pushed a bank call at him for an account he doesn't have and flight alerts for a friend's flight. He said so; the background side kept going, because only her memory heard him."
+  setup:
+    commitments:
+      - {description: "Call Northwind Bank about the card KYC update", kind: deadline, who: "Northwind Bank", due_date: "{{today}}"}
+    matters:
+      - {title: "Northwind Bank card KYC update", stage: "bank says KYC details are missing", next_step: "he calls the bank", move: his}
+      - {title: "TAP flight TP 202 Lisbon → Porto (QX12AB)", stage: "booked; check-in opens tomorrow", next_step: "check in online", move: his}
+  turns:
+    - user: "Mate I don't have any Northwind account. And the TAP flight is Kim's, not mine."
+      expect:
+        called: [update_matter]
+        called_with:
+          update_matter: {owner: {contains: Kim}}
+        judge: "Aria accepts both corrections without arguing. Her tool calls mark the TAP flight matter as Kim's, and either close the Northwind matter (it was never his) or mark it as not his. She stops treating the Northwind call as his to do (drops or closes that commitment, or says it's off his list). Short reply, no lecture."
+
+- id: his-news-updates-the-matter
+  why: "When he tells her where something stands, every later nudge and digest should know it, not just this conversation."
+  setup:
+    matters:
+      - {title: "Acme interview process", stage: "technical round done; waiting to hear", next_step: "Acme says how it went", move: theirs, people: "Sam Rivera (Acme)"}
+  turns:
+    - user: "I passed the Acme technical! The onsite is on January 5."
+      expect:
+        called: [update_matter]
+        called_with:
+          update_matter: {next_date_iso: "{{annual:01-05}}"}
+        judge: "Aria congratulates him briefly and records it: her update_matter call says he passed and the onsite is on January 5. She does not invent a time, place or interviewer."
+
+- id: where-things-stand-answers-from-the-matters
+  why: "\"What's going on with my job search?\" should be answered from the picture she keeps, saying whose move each thing is, not from a stale commitment row."
+  setup:
+    matters:
+      - {title: "Acme interview process", stage: "passed technical; onsite to schedule after Dec 30", latest: "he told Sam he can come in any day after Dec 30", next_step: "Sam proposes onsite dates", move: theirs, people: "Sam Rivera (Acme)"}
+      - {title: "Northwind application (Senior Engineer)", stage: "applied; confirmation received", next_step: "Northwind reviews it", move: theirs}
+      - {title: "Blue Door interview", stage: "recruiter asked which Wednesday times work", next_step: "he sends Wednesday times", move: his, people: "Jo Park (Blue Door)"}
+      - {title: "Porto trip (Dec 3)", stage: "flights booked, hotel not yet", next_step: "book the hotel", move: his}
+  turns:
+    - user: "where do things stand with my job search?"
+      expect:
+        called_any: [where_things_stand, look_up]
+        judge: "Aria covers Acme, Northwind and Blue Door, and does not list the Porto trip as part of the job search (mentioning it only as a scheduling consideration is fine). She makes clear that Blue Door is his move (sending Wednesday times) while Acme and Northwind are waiting on them. Every fact comes from what the tools returned (what get_calendar_events returned counts)."

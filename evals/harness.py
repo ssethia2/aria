@@ -506,6 +506,11 @@ def _seed(sb, setup: dict):
             cm.drop(cid)
         if c.get("snoozed_until"):
             cm.snooze(cid, c["snoozed_until"])
+    for m in setup.get("matters", []) or []:
+        import matters
+        mid = matters.create({k: m.get(k) for k in matters.FIELDS})
+        if m.get("status") == "closed":
+            matters.close(mid, "closed in setup")
     if setup.get("rules"):
         import instructions
         items = instructions._load()
