@@ -251,7 +251,8 @@ class TestNewestWordReachesTheDigest(StoreMixin, unittest.TestCase):
         state["pending_digest"].append({"sender": "Kim", "subject": "Dinner", "reason": "asks about Sat",
                                         "at": "Tue 7:31 PM"})
         with patch.object(EmailDigestMonitor, "_as_of_now", side_effect=lambda items: items), \
-             patch("situation.in_motion", return_value={"calendar": "", "commitments": ""}), \
+             patch("situation.in_motion", return_value={"calendar": "", "commitments": "",
+                                                         "matters": ""}), \
              patch("instructions.render_for_prompt", return_value=""), \
              patch.object(engine, "ask", return_value='{"bullets": ["Kim: dinner Saturday"]}') as ask:
             (digest,) = mon._maybe_flush_digest(state)

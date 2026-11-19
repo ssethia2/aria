@@ -71,7 +71,7 @@ class TempStateMixin:
         self._sit.start()
         self.addCleanup(self._sit.stop)
         self._motion = patch.object(situation, 'in_motion', return_value={
-            "calendar": "(nothing)", "commitments": "(none)"})
+            "calendar": "(nothing)", "commitments": "(none)", "matters": "(none yet)"})
         self._motion.start()
         self._known = patch.object(situation, 'known_about', return_value={})
         self._known.start()
@@ -721,10 +721,12 @@ class TestEmailDigestMonitor(TempStateMixin, unittest.TestCase):
         with patch.object(situation, 'known_about',
                           return_value={"you_remember": "- interviewing with Acme"}), \
              patch.object(situation, 'in_motion', return_value={
-                 "calendar": "Thu Nov 12, 2:00 PM — Acme interview", "commitments": "(none)"}):
+                 "calendar": "Thu Nov 12, 2:00 PM — Acme interview", "commitments": "(none)",
+                 "matters": "M1 Acme interview process — onsite next"}):
             _, _, _, prompt = self._screen_one("Acme interview", "Kim <kim@acme.com>", '[]')
         self.assertIn("interviewing with Acme", prompt)
         self.assertIn("Thu Nov 12, 2:00 PM — Acme interview", prompt)
+        self.assertIn("M1 Acme interview process — onsite next", prompt)
         self.assertIn("one moving part", prompt)
 
     def test_rule_asked_alert_goes_out_now_not_in_the_digest(self):
@@ -920,7 +922,8 @@ class TestDigestAsOfNow(unittest.TestCase):
             "Kim (Acme): interview being scheduled after your reply; nothing needed"]}))
         with patch.object(engine, '_get_llm', return_value=llm), \
              patch.object(situation, 'in_motion', return_value={"calendar": "(nothing)",
-                                                                "commitments": "(none)"}), \
+                                                                "commitments": "(none)",
+                                                                "matters": "(none yet)"}), \
              patch('instructions.render_for_prompt', return_value=""):
             body = EmailDigestMonitor()._write_digest(items)
         self.assertEqual(body.count("•"), 2)
@@ -933,7 +936,8 @@ class TestDigestAsOfNow(unittest.TestCase):
         llm = MagicMock()
         llm.invoke.return_value = MagicMock(content='{"bullets": ["Kim (Acme): all set"]}')
         with patch.object(engine, '_get_llm', return_value=llm), \
-             patch.object(situation, 'in_motion', return_value={"calendar": "", "commitments": ""}), \
+             patch.object(situation, 'in_motion', return_value={"calendar": "", "commitments": "",
+                                                                "matters": ""}), \
              patch('instructions.render_for_prompt', return_value=""):
             self.assertIsNone(EmailDigestMonitor()._write_digest(
                 self._as_of_now(open_ids=[9], replied=set())))

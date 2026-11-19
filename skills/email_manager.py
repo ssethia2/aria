@@ -544,7 +544,7 @@ def run_email_summary():
     motion = situation.in_motion()
     prompt = PromptTemplate(
         input_variables=["email_data", "profile_data", "rules", "guide", "calendar",
-                         "commitments"],
+                         "commitments", "matters"],
         template='''You are the user's personal assistant, writing the email part of his morning
         briefing. For each email, decide if it is "IMPORTANT", "NEWS", or "JUNK/PROMOTION".
 
@@ -561,6 +561,8 @@ def run_email_summary():
 
         His open commitments:
         {commitments}
+
+        {matters}
 
         Emails:
         {email_data}

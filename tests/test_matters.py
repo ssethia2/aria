@@ -136,6 +136,27 @@ class TestFoldingMailIn(Store):
         self.assertEqual(matters.get(mid)["status"], "open")
 
 
+class TestWhatTheJudgesRead(Store):
+    def test_every_judge_gets_the_matters_with_how_to_read_them(self):
+        matters.create({"title": "Kim's flights", "owner": "Kim"}, now=NOW)
+        text = matters.for_prompt()
+        self.assertIn("where they disagree, it wins", text)
+        self.assertIn("Kim's flights — Kim's, not his", text)
+        with patch("skills.google_calendar.fetch_events", return_value=[]):
+            import situation
+            self.assertIn("Kim's flights", situation.in_motion()["matters"])
+
+    def test_insight_context_carries_the_matters(self):
+        matters.create({"title": "Porto trip"}, now=NOW)
+        with patch("skills.google_calendar.fetch_events", return_value=[]), \
+             patch("skills.weather_manager.fetch_weather_lines", return_value=[]):
+            self.assertIn("M1 Porto trip", engine.InsightMonitor()._gather())
+
+    def test_a_broken_store_never_breaks_a_judge(self):
+        with patch.object(matters, "render", side_effect=RuntimeError("locked")):
+            self.assertEqual(matters.for_prompt(), "(not available)")
+
+
 class TestEngineFoldsEachTicksMail(Store):
     def test_mail_both_ways_goes_to_the_matters_judge(self):
         mon = engine.EmailDigestMonitor(now_fn=lambda: NOW)

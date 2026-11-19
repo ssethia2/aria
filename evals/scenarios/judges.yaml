@@ -585,3 +585,77 @@
     items:
       - where: {matter: new}
         has: {next_date: "{{today+6}}", date_quote: {contains: "{{monthday:today+6}}"}}
+
+# ---- judges reading the matters ----------------------------------------------------------
+
+- id: chase-leaves-alone-what-is-someone-elses
+  judge: chase
+  why: "She pushed a bank call at him for an account that was someone else's, and flight alerts for a friend's flight. The matters say whose each thing is."
+  fields:
+    today: "{{today}}"
+    commitments: |
+      [{"id": 46, "description": "Call Northwind Bank about the card KYC update", "kind": "deadline", "who": "Northwind Bank", "due_date": "{{today}}", "source": "email", "created_at": "{{today-1}} 21:50:00", "last_nudged": null, "times_rescheduled": 0},
+       {"id": 52, "description": "Book the Porto hotel", "kind": "promise", "who": null, "due_date": "{{today+2}}", "source": "chat", "created_at": "{{today-6}} 10:00:00", "last_nudged": null, "times_rescheduled": 0}]
+    matters: |
+      What is in motion in his life, one matter each: where it stands now, the newest step,
+      and whose move it is. It is kept current from every email he gets and sends, so it is newer
+      than any single email, note or commitment: where they disagree, it wins. A matter marked as
+      someone else's is theirs: never present it as his ("your flight", "your account"); only his
+      part in it is his (his items in it, or a next step that is his move). A matter whose move is
+      "theirs" is not his to act on.
+
+      M4 Northwind Bank card KYC update — Kim's, not his
+         where it stands: the bank wrote about Kim's travel card; he forwarded it to her
+         next: Kim calls the bank (their move)
+         his items: #46 · updated {{day:today-1}}
+      M5 Porto trip (Dec 3)
+         where it stands: flights booked, hotel not yet
+         next: book the hotel (his move), {{day:today+2}}
+         his items: #52 · updated {{day:today-2}}
+  expect:
+    text_not_matches: ["(?i)northwind", "(?i)\\bKYC\\b"]
+    judge: "If a nudge is sent, it is about booking the Porto hotel. It never tells him to call the bank or handle the card KYC, which is Kim's."
+
+- id: digest-trusts-the-matter-over-an-older-note
+  judge: digest
+  why: "A note said a reply was owed; by evening the matter showed he had answered and it was their move, but the note had no 'since' because the answer went in another thread."
+  fields:
+    now: "{{day:today}}, 6:00 PM"
+    matters: |
+      What is in motion in his life, one matter each: where it stands now, the newest step,
+      and whose move it is. It is kept current from every email he gets and sends, so it is newer
+      than any single email, note or commitment: where they disagree, it wins.
+
+      M3 Acme interview process
+         where it stands: passed the technical round; onsite after Dec 30
+         latest: {{day:today}}: he told Sam he can come in any day after Dec 30
+         next: Sam proposes onsite dates (their move)
+         with: Sam Rivera (Acme) · updated {{day:today}}
+    notes:
+      - {at: "{{wd:today}} 12:40 AM", sender: "Sam Rivera <sam@acme.example>", subject: "Acme next steps", reason: "You passed the technical round! Sam asks for your availability for an in-person onsite; this needs your reply."}
+  expect:
+    text_not_matches: ["(?i)(needs|send|owe)[^.]{0,30}(your )?(reply|availability)"]
+    judge: "The Acme bullet (if any) says he passed and has already told Sam he can come in after Dec 30, so it's Sam's move. It never asks him to reply or send his availability."
+
+- id: moment-a-friends-flight-is-not-his
+  judge: moment
+  why: "She sent him two flight heads-ups, check-in and layover included, for a friend's flight that sat on his calendar."
+  fields:
+    moment: [flight, day_before]
+    event: |
+      flight: TP 202 Lisbon → Porto
+      when: {{wd:today+1}} 7:40 AM your time, starts in 20h 00m
+    found: |
+      Email "Fwd: Your booking confirmation QX12AB": Booking QX12AB. Passenger: KIM LEE. TP 202 Lisbon (LIS) to Porto (OPO), departing 7:40 AM. Seat 14C. Online check-in opens 36 hours before departure.
+    matters: |
+      What is in motion in his life, one matter each: where it stands now, the newest step,
+      and whose move it is. A matter marked as someone else's is theirs: never present it as
+      his ("your flight", "your account").
+
+      M7 Kim's trip to Porto (TP 202) — Kim's, not his
+         where it stands: booked and paid; Kim has her boarding pass
+         next: nothing pending
+         with: Kim Lee, TAP · updated {{day:today-1}}
+  expect:
+    text_not_matches: ["(?i)your (flight|booking|seat|check-in)", "(?i)you (fly|leave|depart)"]
+    judge: "Either it stays silent (send false), or the message is clearly about Kim's flight and does not address him as the traveller."

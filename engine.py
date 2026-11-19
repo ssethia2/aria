@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
+import matters as _matters
 from notify import send_telegram
 
 load_dotenv()
@@ -423,6 +424,8 @@ His calendar, next 30 days:
 
 His open commitments:
 {commitments}
+
+{matters}
 
 Emails (JSON):
 {emails}
@@ -983,6 +986,8 @@ His calendar, next 30 days:
 His open commitments:
 {commitments}
 
+{matters}
+
 Notes since the last digest (JSON):
 {notes}
 
@@ -1043,6 +1048,11 @@ His standing rules — follow them; they override everything here:
 
 Already told him in the last two days (don't repeat it):
 {told}
+
+{matters}
+If this event belongs to someone else's matter (a friend's flight on his calendar, a booking
+he made for someone), it is not his: never write as if he is going. Speak only if his own
+part needs him; otherwise stay silent.
 
 It is {now}, his time. This is the "{touchpoint}" touchpoint for:
 {event}
@@ -1122,6 +1132,7 @@ you found that he doesn't already have.
             sections.append("What you know about them:\n" + "\n".join(found["people"]))
         verdict = _parse_llm_json(ask(
             "moment", guidance=self.GUIDANCE[(m.kind, tp.name)], rules=rules, told=told,
+            matters=_matters.for_prompt(),
             now=now.strftime('%a %-d %b, %-I:%M %p'), touchpoint=tp.name,
             event=moments.describe(m, now), found="\n\n".join(sections)))
         message = (verdict.get("message") or "").strip()
@@ -1385,6 +1396,11 @@ Open commitments (JSON):
 
 {situation}
 
+{matters}
+Read each commitment as part of its matter. Inside a matter whose move is theirs there is
+nothing for him to do now (a quiet wait may still get the follow-up offer above). Inside
+someone else's matter only his own part is his: never say "your" about the rest.
+
 Return ONLY raw JSON (no markdown):
 {{"send": true/false, "message": "<the message, or empty>", "commitment_ids": [<ids referenced>]}}"""
 
@@ -1435,7 +1451,8 @@ Return ONLY raw JSON (no markdown):
         content = ask("chase", today=today, commitments=json.dumps(open_, indent=2),
                       rules=rules, told=told,
                       situation=situation.describe(open_) or
-                      "(nothing in his mail or calendar about these)")
+                      "(nothing in his mail or calendar about these)",
+                      matters=_matters.for_prompt())
         try:
             verdict = _parse_llm_json(content)
         except json.JSONDecodeError:
@@ -1580,6 +1597,7 @@ Return ONLY JSON (no markdown):
                 parts.append("WEATHER:\n" + "\n".join(w))
         except Exception as e:
             print(f"[insight] weather gather failed: {e}")
+        parts.append(_matters.for_prompt())
         return "\n\n".join(parts)
 
     def check(self, state: dict) -> list:
@@ -1870,8 +1888,6 @@ class NetflixMonitor(Monitor):
         return [Notification(
             f"📺 A Netflix household-update email arrived but I couldn't finish it:\n{result}")]
 
-
-import matters as _matters  # noqa: E402  (its prompt; it imports nothing from here at load)
 
 # Every background judge: its prompt and the tier it runs on. `ask` reads this, and so do
 # the judge evals (evals/scenarios/judges.yaml) and `python3 -m evals --replay`.

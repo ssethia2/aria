@@ -263,6 +263,23 @@ def render(items: list = None, closed: list = None) -> str:
     return out
 
 
+GUIDE = """What is in motion in his life, one matter each: where it stands now, the newest step,
+and whose move it is. It is kept current from every email he gets and sends, so it is newer
+than any single email, note or commitment: where they disagree, it wins. A matter marked as
+someone else's is theirs: never present it as his ("your flight", "your account"); only his
+part in it is his (his items in it, or a next step that is his move). A matter whose move is
+"theirs" is not his to act on."""
+
+
+def for_prompt() -> str:
+    """The matters with how to read them, for any judge's prompt. Never raises."""
+    try:
+        return f"{GUIDE}\n\n{render()}"
+    except Exception as e:
+        print(f"[matters] unavailable: {e}")
+        return "(not available)"
+
+
 # ---- folding new mail in ----------------------------------------------------------------
 
 UPDATE_PROMPT = """You keep Aria's picture of what is going on in her user's life: the MATTERS in

@@ -131,7 +131,8 @@ class TestAsk(RecordMixin, unittest.TestCase):
     def test_thinking_blocks_are_dropped_from_the_answer(self):
         blocks = [{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": '{"send": false}'}]
         text = engine.ask("chase", llm=self.llm(blocks), today="2026-06-10", commitments="[]",
-                          rules="(none)", told="(nothing)", situation="(nothing)")
+                          rules="(none)", told="(nothing)", situation="(nothing)",
+                          matters="(none yet)")
         self.assertEqual(text, '{"send": false}')
 
     def test_record_false_leaves_no_trace(self):

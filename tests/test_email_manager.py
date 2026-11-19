@@ -49,11 +49,13 @@ class TestBriefingSummaryContext(unittest.TestCase):
              patch.object(situation, 'thread_so_far', return_value=[{"direction": "sent", "snippet": "Thursday 2pm works"}]), \
              patch.object(situation, 'known_about', return_value={"you_remember": "- interviewing with Acme"}), \
              patch.object(situation, 'in_motion', return_value={
-                 "calendar": "Thu Nov 12, 2:00 PM — Acme interview", "commitments": "(none)"}):
+                 "calendar": "Thu Nov 12, 2:00 PM — Acme interview", "commitments": "(none)",
+                 "matters": "M1 Acme interview process"}):
             classifications, raw = email_manager.run_email_summary()
         p = seen["prompt"]
         for expected in ("Thursday 2pm works", "interviewing with Acme", "Ping me about interviews",
-                         "Thu Nov 12, 2:00 PM — Acme interview", "one moving part"):
+                         "Thu Nov 12, 2:00 PM — Acme interview", "one moving part",
+                         "M1 Acme interview process"):
             self.assertIn(expected, p)
         self.assertEqual(classifications[0]["id"], "m1")
         self.assertNotIn("thread_id", raw[0])

@@ -279,7 +279,8 @@ def enrich_mail(emails: list, service=None) -> None:
 
 
 def in_motion() -> dict:
-    """His calendar (next 30 days) and open commitments, as prompt text."""
+    """His calendar (next 30 days), open commitments and the matters in motion, as prompt
+    text."""
     calendar, commitments = [], []
     try:
         from skills.google_calendar import fetch_events
@@ -291,8 +292,10 @@ def in_motion() -> dict:
         commitments = [format_line(c) for c in get_open_commitments()]
     except Exception as e:
         print(f"[situation] commitments unavailable: {e}")
+    import matters
     return {"calendar": "\n".join(calendar) or "(nothing)",
-            "commitments": "\n".join(commitments) or "(none)"}
+            "commitments": "\n".join(commitments) or "(none)",
+            "matters": matters.for_prompt()}
 
 
 # ---- the general lookup: "what do I know about X?" -------------------------------------
